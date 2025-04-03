@@ -1,16 +1,10 @@
 use redb::{Database, Error, TableDefinition};
 use std::path::Path;
-//use once_cell::sync::Lazy;
-//use std::sync::Mutex;
 
 // Define table names for different value types
 const INT_TABLE: TableDefinition<&str, i64> = TableDefinition::new("integers");
 const FLOAT_TABLE: TableDefinition<&str, f64> = TableDefinition::new("floats");
 const STRING_TABLE: TableDefinition<&str, &str> = TableDefinition::new("strings");
-
-// static KV_STORE: Lazy<Mutex<KV>> = Lazy::new(|| {
-//     Mutex::new(KV::new("data.redb").expect("Failed to create KV store"))
-// });
 
 pub struct KV {
     db: Database,

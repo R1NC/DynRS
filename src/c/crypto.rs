@@ -96,12 +96,12 @@ fn ngenrs_crypto_rsa_encrypt(
     }
 
     let input_bytes = match cbytes_to_rust(input, input_len) {
-        Some(bytes) => bytes.to_vec(),  // Convert to Vec<u8>
+        Some(bytes) => bytes.to_vec(),
         None => return std::ptr::null_mut(),
     };
 
     let pub_key_bytes = match cbytes_to_rust(pub_key, pub_key_len) {
-        Some(bytes) => bytes.to_vec(),  // Convert to Vec<u8>
+        Some(bytes) => bytes.to_vec(),
         None => return std::ptr::null_mut(),
     };
 
@@ -126,12 +126,12 @@ fn ngenrs_crypto_rsa_decrypt(
     }
 
     let input_bytes = match cbytes_to_rust(input, input_len) {
-        Some(bytes) => bytes.to_vec(),  // Convert to Vec<u8>
+        Some(bytes) => bytes.to_vec(),
         None => return std::ptr::null_mut(),
     };
 
     let priv_key_bytes = match cbytes_to_rust(priv_key, priv_key_len) {
-        Some(bytes) => bytes.to_vec(),  // Convert to Vec<u8>
+        Some(bytes) => bytes.to_vec(),
         None => return std::ptr::null_mut(),
     };
 

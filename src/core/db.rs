@@ -43,7 +43,6 @@ impl<'a> QueryResult<'a> {
                 
                 for (idx, name) in self.columns.iter().enumerate() {
                     column_indices.insert(name.clone(), idx);
-                    // Use get() instead of get_raw()
                     if let Ok(value) = row.get::<_, Value>(idx) {
                         values.push(value);
                     }

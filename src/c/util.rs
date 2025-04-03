@@ -58,7 +58,6 @@ pub fn ngenrs_free_ptr<T>(raw: *mut T) {
     }
 }
 
-// Replace the manually written exports with macro versions
 #[unsafe(no_mangle)]
 pub extern "C"
 fn ngenrs_free_cstr(s: *mut c_char) {
@@ -131,7 +130,6 @@ pub unsafe fn rust_map_to_c_arrays(
         std::ptr::copy_nonoverlapping(keys_ptr, keys_out, len);
         std::ptr::copy_nonoverlapping(values_ptr, values_out, len);
         
-        // Clean up using our standard free function
         ngenrs_free_ptr(keys_ptr);
         ngenrs_free_ptr(values_ptr);
     }

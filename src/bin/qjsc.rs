@@ -18,12 +18,10 @@ fn main() {
     let input_path = Path::new(&args[args.len() - 2]);
     let output_path = Path::new(&args[args.len() - 1]);
 
-    // Initialize QuickJS runtime
     unsafe {
         let rt = JS_NewRuntime();
         let ctx = JS_NewContext(rt);
 
-        // Read and compile JS file
         let script = match read_to_string(input_path) {
             Ok(s) => s,
             Err(e) => {
@@ -32,7 +30,6 @@ fn main() {
             }
         };
 
-        // Store length before moving script into CString
         let script_len = script.len();
         let cscript = match CString::new(script) {
             Ok(s) => s,
@@ -63,7 +60,6 @@ fn main() {
                 },
         );
 
-        // Write compiled bytecode to file
         let mut out_file = match File::create(output_path) {
             Ok(f) => f,
             Err(e) => {
@@ -88,6 +84,6 @@ fn main() {
         // Cleanup
         JS_FreeContext(ctx);
         JS_FreeRuntime(rt);
-        let _ = CString::from_raw(cfilename); // Free the CString
+        let _ = CString::from_raw(cfilename);
     }
 }

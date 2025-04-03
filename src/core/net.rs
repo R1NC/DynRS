@@ -133,7 +133,7 @@ impl HttpClient {
 
         // Stream the response body to file
         let mut file = tokio::fs::File::create(output_path).await?;
-        let mut stream = response.bytes_stream(); // Now this will work
+        let mut stream = response.bytes_stream();
 
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;

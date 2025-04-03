@@ -16,12 +16,12 @@ impl UserData for TimerHandle {}
 
 struct TimerState {
     next_id: usize,
-    active_timers: HashMap<usize, TimerEntry>,  // Removed lifetime parameter
+    active_timers: HashMap<usize, TimerEntry>,
 }
 
 pub struct LuaBridge {
     lua: Lua,
-    timers: Arc<Mutex<TimerState>>,  // Removed lifetime parameter
+    timers: Arc<Mutex<TimerState>>,
 }
 
 impl LuaBridge {

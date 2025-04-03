@@ -53,7 +53,7 @@ impl JSBridge {
                 eval_flags,
             );
 
-            self.eval_and_handle_errors(*ctx, val) // Changed from &mut *ctx to *ctx
+            self.eval_and_handle_errors(*ctx, val)
         }
     }
 
@@ -75,12 +75,11 @@ impl JSBridge {
             );
 
             if let Err(e) = self.eval_and_handle_errors(*ctx, obj) {
-                // Changed here
                 return Err(e.replace("Execution", "Bytecode read"));
             }
 
             let val = libquickjs_ng_sys::JS_EvalFunction(*ctx, obj);
-            self.eval_and_handle_errors(*ctx, val) // Changed here
+            self.eval_and_handle_errors(*ctx, val)
                 .map_err(|e| e.replace("Execution", "Bytecode evaluation"))
         }
     }
@@ -98,7 +97,6 @@ impl JSBridge {
                 return Err(format!("Function {} not found", func_name));
             }
 
-            // Create JS string from input arg
             let arg_val =
                 JS_NewStringLen(*ctx, arg.as_ptr() as *const i8, arg.len() as libc::size_t);
 
@@ -106,7 +104,7 @@ impl JSBridge {
                 *ctx,
                 func_val,
                 global,
-                1, // Single argument
+                1,
                 &arg_val as *const JSValue as *mut JSValue,
             );
 
@@ -126,7 +124,6 @@ impl JSBridge {
                 return Err(format!("Function call error: {}", err_msg));
             }
 
-            // Convert result to string
             let mut len = 0;
             let ptr = libquickjs_ng_sys::JS_ToCStringLen2(*ctx, &mut len, result, false);
             let result_str = cstr_to_rust(ptr).unwrap_or("").to_string();
@@ -188,7 +185,6 @@ impl JSBridge {
                                 err_cstr,
                                 libc::strlen(err_cstr),
                             );
-                            // Use utility function to free the C string
                             ngenrs_free_cstr(err_cstr);
                             libquickjs_ng_sys::JS_Throw(ctx, js_str);
                             let global = libquickjs_ng_sys::JS_GetGlobalObject(ctx);

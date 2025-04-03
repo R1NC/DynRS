@@ -28,7 +28,6 @@ fn _ngenrs_z_process(
         None => return CString::new("Invalid input buffer").unwrap().into_raw() as *mut u8,
     };
 
-    // Then update the error handling in the match statement:
     match operation(std::io::Cursor::new(input_slice), format) {
         Ok(result) => {
             let (ptr, len) = rust_to_cbytes(result);

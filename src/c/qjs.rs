@@ -2,14 +2,12 @@ use crate::c::util::{box_into_raw_new, cstr_to_rust, cbytes_to_rust, ngenrs_free
 use crate::core::qjs::JSBridge;
 use libc::{c_char, c_void};
 
-/// Creates a new JSBridge instance
 #[unsafe(no_mangle)]
 pub extern "C" 
 fn ngenrs_qjs_init() -> *mut c_void {
     box_into_raw_new(JSBridge::new()) as *mut c_void
 }
 
-/// Common handler for loading operations
 fn _ngenrs_qjs_load<T, F>(
     handle: *mut c_void,
     input: T,
@@ -115,7 +113,6 @@ fn ngenrs_qjs_load_bytecode_content(
     })
 }
 
-/// Calls a JavaScript function with single string argument
 #[unsafe(no_mangle)]
 pub extern "C" 
 fn ngenrs_qjs_call_function(
@@ -156,7 +153,6 @@ fn ngenrs_qjs_call_function(
     }
 }
 
-/// Frees a JSBridge instance
 #[unsafe(no_mangle)]
 pub extern "C" 
 fn ngenrs_qjs_release(handle: *mut c_void) {

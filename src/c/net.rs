@@ -10,7 +10,6 @@ static RUNTIME: Lazy<Runtime> = Lazy::new(|| {
     Runtime::new().expect("Failed to create Tokio runtime")
 });
 
-// Client management
 #[unsafe(no_mangle)]
 pub extern "C"
 fn ngenrs_http_client_init(ca_cert_path: *const c_char) -> *mut c_void {
@@ -32,7 +31,6 @@ fn ngenrs_http_client_release(client: *mut c_void) {
     ngenrs_free_ptr(client)
 }
 
-// HTTP GET
 #[unsafe(no_mangle)]
 pub extern "C" 
 fn ngenrs_http_get(
@@ -62,7 +60,6 @@ fn ngenrs_http_get(
     }
 }
 
-// HTTP POST
 #[unsafe(no_mangle)]
 pub extern "C" 
 fn ngenrs_http_post(
@@ -96,7 +93,6 @@ fn ngenrs_http_post(
     }
 }
 
-// HTTP DOWNLOAD
 #[unsafe(no_mangle)]
 pub extern "C" 
 fn ngenrs_http_download(
@@ -122,7 +118,6 @@ fn ngenrs_http_download(
     }
 }
 
-// Response parsing functions
 #[unsafe(no_mangle)]
 pub extern "C"
 fn ngenrs_http_parse_rsp_status(rsp_ptr: *mut c_void) -> i32 {
@@ -160,7 +155,7 @@ fn ngenrs_http_parse_rsp_body(rsp_ptr: *mut c_void) -> *mut c_char {
     }
     let rsp = unsafe { &*(rsp_ptr as *const HttpResponse) };
     match &rsp.body {
-        Some(body) => rust_to_cstr(body.to_string()),  // Convert &str to String if needed
+        Some(body) => rust_to_cstr(body.to_string()),
         None => std::ptr::null_mut(),
     }
 }
