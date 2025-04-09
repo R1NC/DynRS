@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use reqwest::Client;
 use reqwest::header::HeaderMap;
+use reqwest::multipart;
 use futures::StreamExt;
 use std::borrow::Borrow;
 use serde_json::Value;
@@ -145,5 +146,41 @@ impl HttpClient {
             headers,
             body: None,
         })
+    }
+
+    pub async fn upload<K, V>(
+        &self,
+        url: &str,
+        headers: Option<HashMap<K, V>>,
+        parts: Vec<(String, Vec<u8>, Option<String>, Option<String>)>,
+    ) -> Result<HttpResponse, Box<dyn std::error::Error>>
+    where
+        K: Borrow<str>,
+        V: Borrow<str>,
+    {
+        let mut request = self.client.post(url);
+
+        if let Some(headers_map) = headers {
+            for (key, value) in headers_map {
+                request = request.header(key.borrow(), value.borrow());
+            }
+        }
+
+        let mut form = multipart::Form::new();
+        for (name, data, mime_type, filename) in parts {
+            let part = multipart::Part::bytes(data);
+            let part = match mime_type {
+                Some(mime) => part.mime_str(&mime)?,
+                None => part,
+            };
+            let part = match filename {
+                Some(name) => part.file_name(name),
+                None => part,
+            };
+            form = form.part(name, part);
+        }
+
+        request = request.multipart(form);
+        self.execute_request(request).await
     }
 }

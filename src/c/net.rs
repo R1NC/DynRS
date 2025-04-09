@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::os::raw::{c_char, c_void};
 use std::path::Path;
+use std::slice;
 use crate::c::util::{cstr_to_rust, rust_to_cstr, rust_map_from_c_arrays, rust_map_to_c_arrays, ngenrs_free_ptr, box_into_raw_new};
 use crate::core::net::{HttpClient, HttpResponse};
 use once_cell::sync::Lazy;
@@ -110,6 +111,61 @@ fn ngenrs_http_download(
 
     let result = RUNTIME.block_on(async {
         client.download(&url, headers, output_path).await
+    });
+
+    match result {
+        Ok(resp) => box_into_raw_new(resp) as *mut c_void,
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" 
+fn ngenrs_http_upload(
+    client: *const c_void,
+    url: *const c_char,
+    header_keys: *const *const c_char,
+    header_values: *const *const c_char,
+    headers_len: usize,
+    part_names: *const *const c_char,
+    part_data: *const *const u8,
+    part_data_lens: *const usize,
+    part_mimes: *const *const c_char,
+    part_filenames: *const *const c_char,
+    parts_len: usize,
+) -> *mut c_void {
+    let client = unsafe { &*(client as *const HttpClient) };
+    let url = cstr_to_rust(url).unwrap_or_default();
+    let headers = unsafe { rust_map_from_c_arrays(header_keys, header_values, headers_len) };
+
+    let mut parts = Vec::new();
+    unsafe {
+        let names = slice::from_raw_parts(part_names, parts_len);
+        let datas = slice::from_raw_parts(part_data, parts_len);
+        let data_lens = slice::from_raw_parts(part_data_lens, parts_len);
+        let mimes = slice::from_raw_parts(part_mimes, parts_len);
+        let filenames = slice::from_raw_parts(part_filenames, parts_len);
+
+        for i in 0..parts_len {
+            let name = cstr_to_rust(names[i]).unwrap_or_default().to_string();
+            let data = slice::from_raw_parts(datas[i], data_lens[i]).to_vec();
+            let mime = if !mimes[i].is_null() {
+                Some(cstr_to_rust(mimes[i]).unwrap_or_default().to_string())
+            } else {
+                None
+            };
+            let filename = if !filenames[i].is_null() {
+                Some(cstr_to_rust(filenames[i]).unwrap_or_default().to_string())
+            } else {
+                None
+            };
+
+            parts.push((name, data, mime, filename));
+        }
+    }
+
+    let result = RUNTIME.block_on(async {
+        client.upload(&url, headers, parts).await
     });
 
     match result {
