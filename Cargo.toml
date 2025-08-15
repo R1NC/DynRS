@@ -1,10 +1,10 @@
 [package]
-name = "ngenrs"
+name = "dynrs"
 version = "0.1.0"
 edition = "2024"
 
 [lib]
-name = "ngenrs"
+name = "dynrs"
 crate-type = ["staticlib", "cdylib"]
 
 [[bin]]
