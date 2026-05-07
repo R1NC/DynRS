@@ -1,5 +1,7 @@
 # DynRS
 
+[![CI](https://github.com/R1NC/DynRS/actions/workflows/ci.yml/badge.svg)](https://github.com/R1NC/DynRS/actions/workflows/ci.yml)
+
 A cross-platform framework based on Rust, supporting biz dev via Lua & JS.
 
 > :point_right: The modern C++ version: [DynXX](https://github.com/R1NC/DynXX).
