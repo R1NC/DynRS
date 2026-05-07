@@ -29,7 +29,10 @@ rustflags = [
   "-C", "link-arg=--export-table"
 ]
 
-[target.x86_64-pc-windows-gnu]
-ar = "x86_64-w64-mingw32-ar"
-linker = "x86_64-w64-mingw32-gcc"
-rustflags = ["-C", "link-arg=-static"]
+[target.x86_64-pc-windows-msvc]
+linker = "lld-link"
+
+[env]
+CC_x86_64_pc_windows_msvc = "clang-cl"
+CXX_x86_64_pc_windows_msvc = "clang-cl"
+AR_x86_64_pc_windows_msvc = "llvm-lib"
