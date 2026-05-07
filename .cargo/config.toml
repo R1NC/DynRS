@@ -31,8 +31,3 @@ rustflags = [
 
 [target.x86_64-pc-windows-msvc]
 linker = "lld-link"
-
-[env]
-CC_x86_64_pc_windows_msvc = "clang-cl"
-CXX_x86_64_pc_windows_msvc = "clang-cl"
-AR_x86_64_pc_windows_msvc = "llvm-lib"
