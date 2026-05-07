@@ -25,7 +25,7 @@ impl DB {
         Ok(())
     }
 
-    pub fn query(&mut self, sql: &str) -> Result<QueryResult, rusqlite::Error> {
+    pub fn query(&mut self, sql: &str) -> Result<QueryResult<'_>, rusqlite::Error> {
         let stmt = self.conn.prepare(sql)?;
         let columns = stmt.column_names().iter().map(|s| s.to_string()).collect();
         Ok(QueryResult { stmt, columns })

@@ -84,7 +84,8 @@ impl LuaBridge {
     
         let timers_remove = self.timers.clone();
         self.export_function("removeTimer", move |lua, value: mlua::Value| {
-            let handle = TimerHandle::from_lua(value, lua)?;
+            let ud = mlua::AnyUserData::from_lua(value, lua)?;
+            let handle = ud.borrow::<TimerHandle>()?.clone();
             let mut state = timers_remove.lock().unwrap();
             state.active_timers.remove(&handle.0);
             Ok(())
@@ -110,7 +111,7 @@ impl LuaBridge {
     pub fn export_function<'a, F, R>(&self, name: &str, func: F) -> Result<(), String>
     where
         F: Fn(&Lua, mlua::Value) -> mlua::Result<R> + 'static,
-        R: for<'lua> mlua::ToLuaMulti<'lua>,
+        R: for<'lua> mlua::IntoLuaMulti<'lua>,
     {
         let lua_func = self.lua.create_function(func).map_err(|e| e.to_string())?;
         self.lua.globals().set(name, lua_func).map_err(|e| e.to_string())
@@ -121,7 +122,7 @@ impl LuaBridge {
     where
         F: Fn(A) -> R + 'static,
         A: for<'lua> mlua::FromLuaMulti<'lua>,
-        R: for<'lua> mlua::ToLuaMulti<'lua>,
+        R: for<'lua> mlua::IntoLuaMulti<'lua>,
     {
         let lua_func = self.lua.create_function(move |_, args| Ok(func(args))).map_err(|e| e.to_string())?;
         self.lua.globals().set(name, lua_func).map_err(|e| e.to_string())
