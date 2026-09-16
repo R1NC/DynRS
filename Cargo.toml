@@ -37,8 +37,13 @@ mlua = { version = "0.9.9", features = ["lua54", "vendored"] }
 libquickjs-ng-sys = "0.8"
 aes-gcm = "0.11.1"
 
-# The network module needs a real socket stack and a native TLS backend, neither of which exists
-# on wasm. DynXX leaves curl out of its Emscripten build for the same reason.
+# The network module needs a socket stack and a TLS backend, neither of which wasm has. DynXX
+# leaves curl out of its Emscripten build for the same reason.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 reqwest = { version = "0.12", features = ["json", "stream", "native-tls", "multipart"] }
 tokio = { version = "1.0", features = ["full"] }
+
+# `native-tls` reaches for OpenSSL on Android and the NDK ships none (no headers, no import
+# libraries), so it is built from source here, the way DynXX's vcpkg builds it.
+[target.'cfg(target_os = "android")'.dependencies]
+openssl = { version = "0.10", features = ["vendored"] }

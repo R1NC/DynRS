@@ -45,19 +45,29 @@ jobs:
         with:
           version: 3.1.65
 
-      # bindgen, which reads the QuickJS headers for the Rust side, parses them with libclang, so
-      # it has to be pointed at the C headers of the target.
-      - name: Point bindgen at the Emscripten sysroot
+      # `libquickjs-ng-sys` always compiles with plain clang (it ignores `CC`), and bindgen parses
+      # the QuickJS headers with libclang, so both have to be pointed at the C headers of the
+      # target instead of the host ones.
+      - name: Point clang and bindgen at the Emscripten sysroot
         shell: bash
         run: |
           set -euo pipefail
-          sysroot="${EMSDK}/upstream/emscripten/cache/sysroot"
-          if [ ! -d "${sysroot}" ]; then
-            sysroot="${EMSDK}/upstream/emscripten/system"
+          sysroot=""
+          for candidate in "${EMSDK}/upstream/emscripten/cache/sysroot" "${EMSDK}/upstream/emscripten/system"; do
+            if [ -f "${candidate}/include/stdio.h" ]; then
+              sysroot="${candidate}"
+              break
+            fi
+          done
+          if [ -z "${sysroot}" ]; then
+            echo "::error::no Emscripten sysroot was found"
+            exit 1
           fi
-          if [ -d "${sysroot}" ]; then
-            echo "BINDGEN_EXTRA_CLANG_ARGS_wasm32_unknown_emscripten=--sysroot=${sysroot}" >> "${GITHUB_ENV}"
-          fi
+          {
+            echo "BINDGEN_EXTRA_CLANG_ARGS_wasm32_unknown_emscripten=--sysroot=${sysroot}"
+            echo "CFLAGS_wasm32_unknown_emscripten=--sysroot=${sysroot}"
+          } >> "${GITHUB_ENV}"
+          echo "sysroot=${sysroot}"
 
       - name: Detect libclang path
         shell: bash

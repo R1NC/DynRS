@@ -19,31 +19,13 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
-# One Ubuntu host, every Android ABI, library only: the tests of this crate run on the host, so
+# One Ubuntu host, the arm64-v8a ABI, library only: the tests of this crate run on the host, so
 # this target is a build check (the same shape as DynXX's Android workflow).
 
 jobs:
   android:
-    name: android (${{ matrix.abi }})
+    name: android (arm64-v8a)
     runs-on: ubuntu-latest
-
-    strategy:
-      # Every ABI reports its own result instead of the first failure hiding the rest.
-      fail-fast: false
-      matrix:
-        include:
-          - target: armv7-linux-androideabi
-            abi: armeabi-v7a
-            clang: armv7a-linux-androideabi24-clang
-          - target: aarch64-linux-android
-            abi: arm64-v8a
-            clang: aarch64-linux-android24-clang
-          - target: i686-linux-android
-            abi: x86
-            clang: i686-linux-android24-clang
-          - target: x86_64-linux-android
-            abi: x86_64
-            clang: x86_64-linux-android24-clang
 
     steps:
       - name: Checkout
@@ -52,7 +34,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: aarch64-linux-android
 
       - name: Detect libclang path
         shell: bash
@@ -94,29 +76,30 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: ${{ runner.os }}-android-${{ matrix.abi }}-cargo-${{ hashFiles('Cargo.lock') }}
+          key: ${{ runner.os }}-android-arm64-v8a-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-android-${{ matrix.abi }}-cargo-
+            ${{ runner.os }}-android-arm64-v8a-cargo-
 
       # The vendored C (SQLite, Lua, QuickJS, zlib) is compiled with the NDK toolchain, whose
-      # `llvm-ar` also archives the result. The manifest declares a static library, so nothing is
-      # linked against the Android libraries.
+      # `llvm-ar` also archives the result, and OpenSSL is built from source for the same toolchain
+      # because `native-tls` needs it and the NDK does not ship it.
       - name: Build the static library
         shell: bash
         env:
-          TARGET: ${{ matrix.target }}
+          TARGET: aarch64-linux-android
         run: |
           set -euo pipefail
           ndk="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64"
           export PATH="${ndk}/bin:${PATH}"
+          export ANDROID_NDK_ROOT="${ANDROID_NDK_HOME}"
           underscore="${TARGET//-/_}"
-          export "CC_${underscore}=${ndk}/bin/${{ matrix.clang }}"
+          export "CC_${underscore}=${ndk}/bin/aarch64-linux-android24-clang"
           export "AR_${underscore}=${ndk}/bin/llvm-ar"
           cargo build --release --lib --locked --target "${TARGET}"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Android-${{ matrix.abi }}-build
-          path: target/${{ matrix.target }}/release/libdynrs.a
+          name: Android-arm64-v8a-build
+          path: target/aarch64-linux-android/release/libdynrs.a
           if-no-files-found: error
