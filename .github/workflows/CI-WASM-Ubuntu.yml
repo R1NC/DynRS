@@ -52,6 +52,7 @@ jobs:
         run: |
           set -euo pipefail
           emcc --version | head -n1
+          "${EMSDK}/upstream/bin/clang" --version | head -n1
           if [ -x "${EMSDK}/upstream/bin/wasm-opt" ]; then
             "${EMSDK}/upstream/bin/wasm-opt" --version
           else
@@ -123,6 +124,19 @@ jobs:
           AR_wasm32_unknown_emscripten: emar
         run: |
           set -euo pipefail
+          # `libquickjs-ng-sys` compiles its C with plain `clang` whatever `CC` says, so the clang of
+          # the SDK has to come first on the PATH: the `__INT64_C`/`__UINT64_C` macros that its
+          # sysroot leans on only became predefined macros in LLVM 20, and the image ships an older
+          # clang, which then cannot expand `UINT64_C`.
+          export PATH="${EMSDK}/upstream/bin:${PATH}"
+          case "$(command -v clang)" in
+            "${EMSDK}/"*) ;;
+            *)
+              echo "::error::clang does not come from the Emscripten SDK: $(command -v clang)"
+              exit 1
+              ;;
+          esac
+          clang --version | head -n1
           sed -i 's/crate-type = \["staticlib"\]/crate-type = ["cdylib"]/' Cargo.toml
           grep -n 'crate-type' Cargo.toml
           cargo build --release --lib --locked --target wasm32-unknown-emscripten

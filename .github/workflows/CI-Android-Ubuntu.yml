@@ -105,6 +105,8 @@ jobs:
           underscore="${TARGET//-/_}"
           export "CC_${underscore}=${ndk}/bin/aarch64-linux-android24-clang"
           export "AR_${underscore}=${ndk}/bin/llvm-ar"
+          # OpenSSL's build indexes its archives with ranlib, which the NDK calls `llvm-ranlib`.
+          export "RANLIB_${underscore}=${ndk}/bin/llvm-ranlib"
           # `.cargo/config.toml` points this target at a local NDK as well (its `${env.…}` is not
           # expanded and the path is the macOS one), so all three settings are overridden through
           # the environment, which takes precedence over the config file.

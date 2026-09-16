@@ -291,8 +291,9 @@ impl JSBridge {
                 return Err(format!("Function {} not found", func_name));
             }
 
-            let arg_val =
-                JS_NewStringLen(*ctx, arg.as_ptr() as *const i8, arg.len() as libc::size_t);
+            // `c_char` is `u8` on some targets (aarch64 above all) and `i8` on others, so the cast
+            // is left to inference.
+            let arg_val = JS_NewStringLen(*ctx, arg.as_ptr().cast(), arg.len() as libc::size_t);
 
             let result = JS_Call(
                 *ctx,
