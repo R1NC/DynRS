@@ -1,11 +1,13 @@
 use crate::c::util::{cstr_to_rust, ngenrs_free_cstr, rust_to_cstr};
 use crate::core::timer::{Timers, lock_timers};
+#[cfg(target_pointer_width = "64")]
+use libquickjs_ng_sys::JSValueUnion;
 use libquickjs_ng_sys::{
     JS_Call, JS_Eval, JS_FreeCString, JS_FreeValue, JS_GetException, JS_GetGlobalObject,
     JS_GetPropertyStr, JS_HasException, JS_NewCFunction2, JS_NewContext, JS_NewRuntime,
     JS_NewStringLen, JS_SetPropertyStr, JS_TAG_INT, JS_TAG_UNDEFINED, JS_Throw, JS_ToCStringLen2,
     JS_ToFloat64, JS_ToInt32, JSCFunction, JSCFunctionEnum_JS_CFUNC_generic_magic,
-    JSCFunctionMagic, JSContext, JSRuntime, JSValue, JSValueUnion,
+    JSCFunctionMagic, JSContext, JSRuntime, JSValue,
 };
 use std::collections::HashMap;
 use std::ffi::CString;
@@ -67,20 +69,31 @@ unsafe extern "C" fn js_callback_trampoline(
     }
 }
 
-/// `undefined`, built from the tags the bindings expose because the C macro is not available.
-fn js_undefined() -> JSValue {
+/// Builds a value the way the `JS_MKVAL` macro of QuickJS does. Its 32-bit builds box every value
+/// into a `uint64_t` (`JS_NAN_BOXING`) while the others use a struct, so this cannot be a single
+/// expression, and bindgen does not export the macro itself.
+#[cfg(target_pointer_width = "32")]
+fn js_mkval(tag: i64, value: i32) -> JSValue {
+    ((tag as u64) << 32) | (value as u32 as u64)
+}
+
+/// See [`js_mkval`].
+#[cfg(target_pointer_width = "64")]
+fn js_mkval(tag: i64, value: i32) -> JSValue {
     JSValue {
-        u: JSValueUnion { int32: 0 },
-        tag: JS_TAG_UNDEFINED as i64,
+        u: JSValueUnion { int32: value },
+        tag,
     }
+}
+
+/// `undefined`.
+fn js_undefined() -> JSValue {
+    js_mkval(JS_TAG_UNDEFINED as i64, 0)
 }
 
 /// A small integer result.
 fn js_int(value: i32) -> JSValue {
-    JSValue {
-        u: JSValueUnion { int32: value },
-        tag: JS_TAG_INT as i64,
-    }
+    js_mkval(JS_TAG_INT as i64, value)
 }
 
 /// Reads a number argument, refusing a missing or non-numeric one.
