@@ -8,6 +8,7 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rustfmt.toml'
+      - 'deny.toml'
       - '.github/workflows/Common.yml'
   pull_request:
     paths:
@@ -15,6 +16,7 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rustfmt.toml'
+      - 'deny.toml'
       - '.github/workflows/Common.yml'
   workflow_dispatch:
 
@@ -83,3 +85,18 @@ jobs:
 
       - name: Lint
         run: cargo clippy --all-targets --locked -- -D warnings
+
+  deny:
+    name: deny
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Advisories, licenses, bans and sources, from the policy in deny.toml. The one advisory
+      # without an upstream fix (RUSTSEC-2023-0071) is ignored there with its reason.
+      - name: Check dependencies
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          arguments: --locked

@@ -24,6 +24,8 @@ A cross-platform framework based on Rust, supporting biz dev via Lua & JS.
 * :heavy_check_mark: : Done;
 * :x: : To do;
 
+> **Unfixed advisory**: RSA decryption is not constant time, the `rsa` crate has no patch for the Marvin timing sidechannel (`RUSTSEC-2023-0071`). That advisory does not cover the OpenSSL RSA DynXX uses. CI keeps the dependency policy of `deny.toml`, where this is the only ignored advisory.
+
 ## :hammer_and_wrench: Build
 
 * Rust with edition 2024 support (1.85+).
@@ -37,14 +39,10 @@ cargo fmt --all --check
 cargo clippy --all-targets -- -D warnings
 ```
 
-`Cargo.lock` is committed, so CI builds with `--locked`.
-
 ## :test_tube: Tests
 
 * `src/core/*` — behaviour of the portable layer, mirroring DynXX's gtest coverage.
 * `src/c/*` — ABI contract tests only: null arguments, empty results, ownership.
-* Timers run on the host thread: `addTimer` schedules, `pollTimers` runs what is due, `removeTimer` drops one. A callback may schedule another timer.
-* JNI / ArkTS bridges are not covered, the same as DynXX.
 
 ### Memory ownership at the C ABI
 

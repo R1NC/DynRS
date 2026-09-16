@@ -15,7 +15,7 @@ use rand::RngCore;
 use rsa::pkcs1::DecodeRsaPrivateKey;
 use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey};
 use rsa::rand_core::OsRng;
-use rsa::{Oaep, Pkcs1v15Encrypt, PublicKey, RsaPrivateKey, RsaPublicKey};
+use rsa::{Oaep, Pkcs1v15Encrypt, RsaPrivateKey, RsaPublicKey};
 use sha1::Sha1;
 use sha2::Sha256;
 use std::error::Error;
@@ -527,5 +527,20 @@ mod tests {
                 "padding {padding} cannot decrypt"
             );
         }
+    }
+
+    #[test]
+    fn a_private_key_with_a_prime_of_one_is_refused_instead_of_panicking() {
+        // CVE-2026-21895: before rsa 0.9.10 this divided by zero rather than returning an error,
+        // and `rsa_private_key_from_pem` reaches the same constructor with an untrusted PEM key.
+        let error = RsaPrivateKey::from_components(
+            rsa::BigUint::from(239u64),
+            rsa::BigUint::from(185u64),
+            rsa::BigUint::from(0u64),
+            vec![rsa::BigUint::from(1u64), rsa::BigUint::from(239u64)],
+        )
+        .unwrap_err();
+
+        assert_eq!(error, rsa::Error::InvalidPrime);
     }
 }

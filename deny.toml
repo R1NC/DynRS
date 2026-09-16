@@ -1,0 +1,40 @@
+# Dependency policy, checked by `cargo deny check` in CI.
+#
+# Run it locally with a released binary (`cargo install cargo-deny --locked`) or with
+# `cargo run --manifest-path <checkout-of-cargo-deny>/Cargo.toml -- check`.
+
+[advisories]
+ignore = [
+    # No released version has a fix: `rsa`'s own README states the crate is vulnerable to the
+    # Marvin attack, and the constant time work is tracked in
+    # https://github.com/RustCrypto/RSA/issues/390 with 0.10 (still a release candidate) as the
+    # target. DynRS decrypts data it produced itself, so an attacker never gets to measure the
+    # timing of a private key operation. Revisit as soon as 0.10 is out.
+    { id = "RUSTSEC-2023-0071", reason = "no fix released; tracked upstream as RustCrypto/RSA#390" },
+]
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+[bans]
+# Two versions of a crate are common when two dependency lines move at their own pace, e.g. `aes`
+# and `rand_core`, so that stays a warning. A `*` requirement means a build can change under us,
+# which is a hard error.
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
