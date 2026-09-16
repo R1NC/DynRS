@@ -8,35 +8,6 @@ A cross-platform framework based on Rust, supporting biz dev via Lua & JS.
 
 > :point_right: The modern C++ version: [DynXX](https://github.com/R1NC/DynXX).
 
-## :classical_building: Architecture
-
-```mermaid
-flowchart TD
-    host["Host app (Android · iOS · OHOS · desktop)"]
-    bridge["JNI / ArkTS bridges — not started"]
-    cabi["src/c — C ABI"]
-    core["src/core — crypto · db · kv · net · zip"]
-    lua["lua — LuaBridge"]
-    qjs["qjs — JSBridge"]
-    scripts["Lua / JS scripts"]
-    qjsc["qjsc — bytecode compiler"]
-    crates["mlua · libquickjs-ng-sys · rusqlite · redb · reqwest + native-tls + tokio · flate2 · rsa · aes-gcm · sha2 · base64"]
-
-    host --> bridge --> cabi
-    cabi --> core
-    cabi --> lua
-    cabi --> qjs
-    lua --> scripts
-    qjs --> scripts
-    scripts -.->|engine APIs — not exposed yet| core
-    qjsc -->|.qbc| qjs
-    core --> crates
-    lua --> crates
-    qjs --> crates
-```
-
-The crate builds as a `staticlib` plus a `cdylib`, so one code base serves every host.
-
 ## :clipboard: Status
 
 | Module | Core | C ABI | Unit tests | Compared with DynXX |
@@ -82,12 +53,3 @@ cargo clippy --all-targets -- -D warnings
 | Byte buffers: `ngenrs_crypto_rand`, AES / RSA / hash / base64 outputs | `ngenrs_free_bytes(ptr, len)` |
 | C strings: `ngenrs_crypto_rsa_gen_key`, `ngenrs_*_read_string`, `ngenrs_db_get_string`, `ngenrs_http_parse_rsp_body` | `ngenrs_free_cstr(ptr)` |
 | Handles: `ngenrs_*_open` / `_init` / `_query` | the matching `ngenrs_*_close` / `_release` / `_free_*` |
-
-## :rocket: CI
-
-| Workflow | Contents |
-| :-- | :-- |
-| `Common.yml` | `cargo fmt --all --check`, `cargo clippy --all-targets -- -D warnings` |
-| `CI-Windows-Win.yml` | build and test on `windows-latest` |
-| `CI-Linux-Ubuntu.yml` | build and test on `ubuntu-latest` |
-| `CI-macOS-Mac.yml` | build and test on `macos-latest` |
