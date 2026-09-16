@@ -162,10 +162,13 @@ jobs:
           export CFLAGS_aarch64_unknown_linux_ohos="--target=aarch64-linux-ohos --sysroot=${OHOS_SYSROOT}"
           export BINDGEN_EXTRA_CLANG_ARGS_aarch64_unknown_linux_ohos="--target=aarch64-linux-ohos --sysroot=${OHOS_SYSROOT}"
           # `.cargo/config.toml` has a section for this target too (its `${env.…}` is not expanded),
-          # so the environment - which takes precedence - is what supplies these.
+          # so the environment - which takes precedence - is what supplies these. Unlike the NDK,
+          # this toolchain has no target-prefixed wrapper, so the clang that links has to be told
+          # the target and the sysroot itself; `redb` declares a `cdylib`, so its library is linked
+          # even though the manifest ships a static one.
           export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_LINKER="${OHOS_TOOLCHAIN}/clang"
           export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_AR="${OHOS_TOOLCHAIN}/llvm-ar"
-          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_RUSTFLAGS=""
+          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_RUSTFLAGS="-Clink-arg=--target=aarch64-linux-ohos -Clink-arg=--sysroot=${OHOS_SYSROOT}"
           cargo build --release --lib --locked --target aarch64-unknown-linux-ohos
 
       - name: Upload artifacts
