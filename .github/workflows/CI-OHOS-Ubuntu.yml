@@ -105,9 +105,22 @@ jobs:
             exit 1
           fi
 
-          sysroot="$(dirname "${toolchain}")/sysroot"
-          if [ ! -d "${sysroot}" ]; then
-            echo "::error::no sysroot was found at ${sysroot}"
+          # The sysroot sits next to the toolchain's parent (`<sdk>/native/llvm/bin` under
+          # `<sdk>/native/sysroot`), and it has also been called `sysroot_lite` in some packages,
+          # so the one that carries the C headers wins.
+          native_root="$(dirname "$(dirname "${toolchain}")")"
+          sysroot=""
+          for candidate in "${native_root}/sysroot" "${native_root}/sysroot_lite"; do
+            if [ -f "${candidate}/usr/include/stdio.h" ]; then
+              sysroot="${candidate}"
+              break
+            fi
+          done
+          if [ -z "${sysroot}" ]; then
+            sysroot="$(find "${sdk_root}" -maxdepth 6 -type d -name 'sysroot*' -print -quit || true)"
+          fi
+          if [ -z "${sysroot}" ]; then
+            echo "::error::no sysroot was found in this SDK"
             exit 1
           fi
           echo "clang:   ${clang}"
