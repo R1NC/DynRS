@@ -1,4 +1,13 @@
-use redb::{Database, Error, TableDefinition};
+// redb's error type is 160 bytes, but an error only appears when an I/O operation fails and is
+// mapped to a bool/null at the C ABI right away, so boxing it would only add allocations. The
+// allow covers the store methods and the free helpers alike.
+#![allow(clippy::result_large_err)]
+
+use redb::{
+    Database, Error, Key, ReadOnlyTable, ReadTransaction, ReadableTable, StorageError,
+    TableDefinition, TableError, Value,
+};
+use std::collections::BTreeSet;
 use std::path::Path;
 
 // Define table names for different value types
@@ -6,13 +15,50 @@ const INT_TABLE: TableDefinition<&str, i64> = TableDefinition::new("integers");
 const FLOAT_TABLE: TableDefinition<&str, f64> = TableDefinition::new("floats");
 const STRING_TABLE: TableDefinition<&str, &str> = TableDefinition::new("strings");
 
+/// Opens a table for reading, mapping "never written to" onto `None` so that a missing table reads
+/// like a missing key instead of failing.
+fn open_table_for_read<K, V>(
+    txn: &ReadTransaction,
+    definition: TableDefinition<K, V>,
+) -> Result<Option<ReadOnlyTable<K, V>>, Error>
+where
+    K: Key + 'static,
+    V: Value + 'static,
+{
+    match txn.open_table(definition) {
+        Ok(table) => Ok(Some(table)),
+        Err(TableError::TableDoesNotExist(_)) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Reports whether a typed table holds `key`, treating a table that was never written to as empty.
+macro_rules! table_contains {
+    ($txn:expr, $definition:expr, $key:expr) => {
+        (match open_table_for_read($txn, $definition)? {
+            Some(table) => table.get($key)?.is_some(),
+            None => false,
+        })
+    };
+}
+
+/// Rejects an empty key before the store is touched, the way DynXX does. The public signatures stay
+/// `Result<_, redb::Error>`, so the rule travels as an invalid-input error from that type.
+fn check_key(key: &str) -> Result<(), Error> {
+    if key.is_empty() {
+        return Err(StorageError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "the key must not be empty",
+        ))
+        .into());
+    }
+    Ok(())
+}
+
 pub struct KV {
     db: Database,
 }
 
-// redb's error type is 160 bytes, but an error only appears when an I/O operation fails and
-// is mapped to a bool/null at the C ABI right away, so boxing it would only add allocations.
-#[allow(clippy::result_large_err)]
 impl KV {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, Error> {
         let db = Database::create(path)?;
@@ -20,6 +66,7 @@ impl KV {
     }
 
     pub fn write_int(&self, key: &str, value: i64) -> Result<(), Error> {
+        check_key(key)?;
         let write_txn = self.db.begin_write()?;
         {
             let mut table = write_txn.open_table(INT_TABLE)?;
@@ -30,12 +77,19 @@ impl KV {
     }
 
     pub fn read_int(&self, key: &str) -> Result<Option<i64>, Error> {
+        // An empty key reads as "no value", like DynXX, rather than as a failure.
+        if key.is_empty() {
+            return Ok(None);
+        }
         let read_txn = self.db.begin_read()?;
-        let table = read_txn.open_table(INT_TABLE)?;
-        Ok(table.get(key)?.map(|x| x.value()))
+        match open_table_for_read(&read_txn, INT_TABLE)? {
+            Some(table) => Ok(table.get(key)?.map(|value| value.value())),
+            None => Ok(None),
+        }
     }
 
     pub fn write_float(&self, key: &str, value: f64) -> Result<(), Error> {
+        check_key(key)?;
         let write_txn = self.db.begin_write()?;
         {
             let mut table = write_txn.open_table(FLOAT_TABLE)?;
@@ -46,12 +100,18 @@ impl KV {
     }
 
     pub fn read_float(&self, key: &str) -> Result<Option<f64>, Error> {
+        if key.is_empty() {
+            return Ok(None);
+        }
         let read_txn = self.db.begin_read()?;
-        let table = read_txn.open_table(FLOAT_TABLE)?;
-        Ok(table.get(key)?.map(|x| x.value()))
+        match open_table_for_read(&read_txn, FLOAT_TABLE)? {
+            Some(table) => Ok(table.get(key)?.map(|value| value.value())),
+            None => Ok(None),
+        }
     }
 
     pub fn write_string(&self, key: &str, value: &str) -> Result<(), Error> {
+        check_key(key)?;
         let write_txn = self.db.begin_write()?;
         {
             let mut table = write_txn.open_table(STRING_TABLE)?;
@@ -62,9 +122,99 @@ impl KV {
     }
 
     pub fn read_string(&self, key: &str) -> Result<Option<String>, Error> {
+        if key.is_empty() {
+            return Ok(None);
+        }
         let read_txn = self.db.begin_read()?;
-        let table = read_txn.open_table(STRING_TABLE)?;
-        Ok(table.get(key)?.map(|x| x.value().to_string()))
+        match open_table_for_read(&read_txn, STRING_TABLE)? {
+            Some(table) => Ok(table.get(key)?.map(|value| value.value().to_string())),
+            None => Ok(None),
+        }
+    }
+
+    /// Mirrors `dynxxKVContains`: the key exists when any of the typed tables holds it.
+    pub fn contains(&self, key: &str) -> Result<bool, Error> {
+        if key.is_empty() {
+            return Ok(false);
+        }
+
+        let read_txn = self.db.begin_read()?;
+        // One store key can sit in more than one table, so every table has to be checked.
+        Ok(table_contains!(&read_txn, INT_TABLE, key)
+            || table_contains!(&read_txn, FLOAT_TABLE, key)
+            || table_contains!(&read_txn, STRING_TABLE, key))
+    }
+
+    /// Mirrors `dynxxKVRemove`: drops the key from every typed table and reports whether it was
+    /// there at all.
+    pub fn remove(&self, key: &str) -> Result<bool, Error> {
+        if key.is_empty() {
+            return Ok(false);
+        }
+
+        let write_txn = self.db.begin_write()?;
+        let mut removed = false;
+        {
+            let mut table = write_txn.open_table(INT_TABLE)?;
+            removed |= table.remove(key)?.is_some();
+        }
+        {
+            let mut table = write_txn.open_table(FLOAT_TABLE)?;
+            removed |= table.remove(key)?.is_some();
+        }
+        {
+            let mut table = write_txn.open_table(STRING_TABLE)?;
+            removed |= table.remove(key)?.is_some();
+        }
+        write_txn.commit()?;
+        Ok(removed)
+    }
+
+    /// Mirrors `dynxxKVAllKeys`: every key name once, sorted so that the order is deterministic
+    /// (MMKV's own order is not).
+    pub fn all_keys(&self) -> Result<Vec<String>, Error> {
+        let read_txn = self.db.begin_read()?;
+        let mut keys = BTreeSet::new();
+
+        if let Some(table) = open_table_for_read(&read_txn, INT_TABLE)? {
+            for entry in table.iter()? {
+                let (key, _) = entry?;
+                keys.insert(key.value().to_string());
+            }
+        }
+        if let Some(table) = open_table_for_read(&read_txn, FLOAT_TABLE)? {
+            for entry in table.iter()? {
+                let (key, _) = entry?;
+                keys.insert(key.value().to_string());
+            }
+        }
+        if let Some(table) = open_table_for_read(&read_txn, STRING_TABLE)? {
+            for entry in table.iter()? {
+                let (key, _) = entry?;
+                keys.insert(key.value().to_string());
+            }
+        }
+
+        Ok(keys.into_iter().collect())
+    }
+
+    /// Mirrors `dynxxKVClear`: empties every typed table.
+    pub fn clear(&self) -> Result<(), Error> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut table = write_txn.open_table(INT_TABLE)?;
+            table.retain(|_, _| false)?;
+        }
+        {
+            let mut table = write_txn.open_table(FLOAT_TABLE)?;
+            table.retain(|_, _| false)?;
+        }
+        {
+            let mut table = write_txn.open_table(STRING_TABLE)?;
+            table.retain(|_, _| false)?;
+        }
+        write_txn.commit()?;
+        Ok(())
     }
 }
 
@@ -237,5 +387,100 @@ mod tests {
         assert_eq!(kv.read_int("a").expect("a is read"), Some(1));
         assert_eq!(kv.read_int("b").expect("b is read"), Some(2));
         assert_eq!(kv.read_int("c").expect("c is read"), None);
+    }
+
+    #[test]
+    fn a_fresh_store_reads_as_empty() {
+        let file = TempDbFile::new("fresh");
+        let kv = KV::open(&file.path).expect("store opens");
+
+        // Reading a table that was never written to is "no value", not a failure.
+        assert_eq!(kv.read_int("nope").expect("int is read"), None);
+        assert_eq!(kv.read_float("nope").expect("float is read"), None);
+        assert_eq!(kv.read_string("nope").expect("string is read"), None);
+        assert!(!kv.contains("nope").expect("contains answers"));
+        assert!(kv.all_keys().expect("keys are listed").is_empty());
+    }
+
+    #[test]
+    fn contains_remove_and_all_keys_work_per_key() {
+        let file = TempDbFile::new("contains_remove");
+        let kv = KV::open(&file.path).expect("store opens");
+
+        kv.write_int("b", 2).expect("b is written");
+        kv.write_string("a", "value").expect("a is written");
+
+        // Key names come back sorted, each name once.
+        assert_eq!(kv.all_keys().expect("keys are listed"), ["a", "b"]);
+        assert!(kv.contains("a").expect("a is contained"));
+        assert!(kv.contains("b").expect("b is contained"));
+        assert!(!kv.contains("c").expect("contains answers"));
+
+        assert!(kv.remove("a").expect("a is removed"));
+        assert!(!kv.contains("a").expect("a is gone"));
+        // Removing it again reports that there was nothing left to remove.
+        assert!(!kv.remove("a").expect("removing twice answers"));
+        assert_eq!(kv.all_keys().expect("keys are listed"), ["b"]);
+        assert_eq!(kv.read_string("a").expect("a is read"), None);
+    }
+
+    #[test]
+    fn one_key_can_hold_every_type_and_remove_drops_them_all() {
+        let file = TempDbFile::new("multi_type");
+        let kv = KV::open(&file.path).expect("store opens");
+
+        kv.write_int("k", 1).expect("int is written");
+        kv.write_float("k", 1.5).expect("float is written");
+        kv.write_string("k", "one").expect("string is written");
+
+        // The name is reported once even though three tables hold it.
+        assert_eq!(kv.all_keys().expect("keys are listed"), ["k"]);
+
+        assert!(kv.remove("k").expect("k is removed"));
+        assert_eq!(kv.read_int("k").expect("int is read"), None);
+        assert_eq!(kv.read_float("k").expect("float is read"), None);
+        assert_eq!(kv.read_string("k").expect("string is read"), None);
+    }
+
+    #[test]
+    fn clear_empties_every_type() {
+        let file = TempDbFile::new("clear");
+        let kv = KV::open(&file.path).expect("store opens");
+
+        kv.write_int("i", 1).expect("int is written");
+        kv.write_float("f", 1.5).expect("float is written");
+        kv.write_string("s", "one").expect("string is written");
+
+        kv.clear().expect("store is cleared");
+
+        assert!(kv.all_keys().expect("keys are listed").is_empty());
+        assert!(!kv.contains("i").expect("contains answers"));
+        assert_eq!(kv.read_int("i").expect("int is read"), None);
+        assert_eq!(kv.read_float("f").expect("float is read"), None);
+        assert_eq!(kv.read_string("s").expect("string is read"), None);
+
+        // The store stays usable afterwards.
+        kv.write_string("s", "two").expect("s is written again");
+        assert_eq!(
+            kv.read_string("s").expect("s is read").as_deref(),
+            Some("two")
+        );
+    }
+
+    #[test]
+    fn an_empty_key_is_refused_like_dynxx() {
+        let file = TempDbFile::new("empty_key");
+        let kv = KV::open(&file.path).expect("store opens");
+
+        // Writes fail, reads answer "no value", and the key is never present.
+        assert!(kv.write_int("", 1).is_err());
+        assert!(kv.write_float("", 1.5).is_err());
+        assert!(kv.write_string("", "v").is_err());
+        assert_eq!(kv.read_int("").expect("int is read"), None);
+        assert_eq!(kv.read_float("").expect("float is read"), None);
+        assert_eq!(kv.read_string("").expect("string is read"), None);
+        assert!(!kv.contains("").expect("contains answers"));
+        assert!(!kv.remove("").expect("remove answers"));
+        assert!(kv.all_keys().expect("keys are listed").is_empty());
     }
 }

@@ -25,7 +25,7 @@ The crate builds as a `staticlib` plus a `cdylib`, so one code base serves every
 | Crypto | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | RSA covers PKCS#1 and OAEP only |
 | Network | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | `get` / `post` / `download` / `upload` instead of one `request`; CA path, proxy and DNS overrides included |
 | SQLite | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | |
-| Key-Value | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | `contains` / `remove` / `allKeys` / `clear` not ported yet |
+| Key-Value | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | one store key can hold one value per type, where DynXX's MMKV keeps a single typed value per key; DynXX's 256 byte key limit is not enforced |
 | Zip | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | one-shot `compress` / `decompress` only; DynXX's streaming `zip_init` / `input` / `process_do` API, its `FILE *` variants and the compression modes are not ported |
 | Lua | :heavy_check_mark: | :heavy_check_mark: | :x: | |
 | JS (QuickJS) | :heavy_check_mark: | :heavy_check_mark: | :x: | |
