@@ -214,12 +214,13 @@ pub fn aes_gcm_decrypt(
     if ok { buffer } else { Vec::new() }
 }
 
-/// Mirrors `DynXXCryptoRSAPadding`: the discriminants are OpenSSL's `RSA_*_PADDING`
-/// values, which `Crypto-OpenSSL.cxx` forwards to `EVP_PKEY_CTX_set_rsa_padding`.
+/// Mirrors `DynXXCryptoRSAPadding`: the discriminants are OpenSSL's `RSA_*_PADDING` values, which
+/// `Crypto-OpenSSL.cxx` forwards to `EVP_PKEY_CTX_set_rsa_padding`.
 ///
-/// NOTE: the pure-Rust `rsa` crate only implements PKCS#1 v1.5 and OAEP, so `SslV23`,
-/// `NoPadding`, `X931` and `Pss` yield an empty result instead of behaving like OpenSSL.
-/// OAEP uses SHA-1, matching OpenSSL's default OAEP digest.
+/// Only `Pkcs1` and `Oaep` can encrypt or decrypt: those are the paddings OpenSSL 3.x provides for
+/// `EVP_PKEY_encrypt` / `EVP_PKEY_decrypt` (`SslV23` was dropped in 3.0, while `NoPadding`, `X931`
+/// and `Pss` are for signing). DynXX hands the other values to OpenSSL, which refuses them, and
+/// answers with empty bytes; this does the same. OAEP uses SHA-1, OpenSSL's default OAEP digest.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(i32)]
 pub enum RsaPadding {
@@ -483,5 +484,48 @@ mod tests {
         assert!(base64_encode(&[], true).is_empty());
         assert!(rand(0).is_empty());
         assert_eq!(rand(16).len(), 16);
+    }
+
+    #[test]
+    fn rsa_round_trips_with_the_paddings_encryption_supports() {
+        use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
+
+        let private = RsaPrivateKey::new(&mut OsRng, 1024).expect("a key pair is generated");
+        let public = RsaPublicKey::from(&private);
+        let private_pem = private
+            .to_pkcs8_pem(LineEnding::LF)
+            .expect("the private key encodes to PEM");
+        let public_pem = public
+            .to_public_key_pem(LineEnding::LF)
+            .expect("the public key encodes to PEM");
+
+        let message = b"rsa payload";
+
+        // 1 = PKCS#1 v1.5, 4 = OAEP, the two paddings OpenSSL accepts for encryption.
+        for padding in [1, 4] {
+            let encrypted = rsa_encrypt(message, public_pem.as_bytes(), padding);
+            assert!(!encrypted.is_empty(), "padding {padding} encrypts");
+            assert_ne!(encrypted.as_slice(), message.as_slice());
+
+            let decrypted = rsa_decrypt(&encrypted, private_pem.as_bytes(), padding);
+            assert_eq!(
+                decrypted.as_slice(),
+                message.as_slice(),
+                "padding {padding} restores the input"
+            );
+        }
+
+        // 2 = SSLv23 (dropped by OpenSSL 3.0), 3 = no padding, 5 = X9.31 and 6 = PSS, which only
+        // sign: DynXX forwards them to OpenSSL, which refuses, so both sides answer with nothing.
+        for padding in [2, 3, 5, 6] {
+            assert!(
+                rsa_encrypt(message, public_pem.as_bytes(), padding).is_empty(),
+                "padding {padding} cannot encrypt"
+            );
+            assert!(
+                rsa_decrypt(&[0x21; 128], private_pem.as_bytes(), padding).is_empty(),
+                "padding {padding} cannot decrypt"
+            );
+        }
     }
 }
