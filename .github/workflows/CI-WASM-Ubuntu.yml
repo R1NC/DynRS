@@ -61,7 +61,9 @@ jobs:
 
       # `libquickjs-ng-sys` always compiles with plain clang (it ignores `CC`), and bindgen parses
       # the QuickJS headers with libclang, so both have to be pointed at the C headers of the
-      # target instead of the host ones.
+      # target instead of the host ones. The C is also built as position independent code, because
+      # rustc links a `cdylib` for Emscripten as a side module and `wasm-ld` then refuses the
+      # relocations of the vendored libraries.
       - name: Point clang and bindgen at the Emscripten sysroot
         shell: bash
         run: |
@@ -79,7 +81,7 @@ jobs:
           fi
           {
             echo "BINDGEN_EXTRA_CLANG_ARGS_wasm32_unknown_emscripten=--sysroot=${sysroot}"
-            echo "CFLAGS_wasm32_unknown_emscripten=--sysroot=${sysroot}"
+            echo "CFLAGS_wasm32_unknown_emscripten=--sysroot=${sysroot} -fPIC"
           } >> "${GITHUB_ENV}"
           echo "sysroot=${sysroot}"
 
