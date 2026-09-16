@@ -1,8 +1,11 @@
-use std::ffi::CString;
-use std::os::raw::c_int;
-use std::io;
-use crate::core::zip::{CompressionFormat, compress, decompress};
 use crate::c::util::{cbytes_to_rust, rust_to_cbytes};
+use crate::core::zip::{CompressionFormat, compress, decompress};
+use std::ffi::CString;
+use std::io;
+use std::os::raw::c_int;
+
+/// The compress or decompress function a `_ngenrs_z_process` call runs.
+type ZipOperation = fn(std::io::Cursor<&'static [u8]>, CompressionFormat) -> io::Result<Vec<u8>>;
 
 fn _ngenrs_z_process(
     format: c_int,
@@ -10,7 +13,7 @@ fn _ngenrs_z_process(
     input_len: usize,
     output: *mut *mut u8,
     output_len: *mut usize,
-    operation: fn(std::io::Cursor<&'static [u8]>, CompressionFormat) -> io::Result<Vec<u8>>,
+    operation: ZipOperation,
 ) -> *mut u8 {
     let format = match format {
         0 => CompressionFormat::Gzip,
@@ -42,8 +45,7 @@ fn _ngenrs_z_process(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" 
-fn ngenrs_z_compress(
+pub extern "C" fn ngenrs_z_compress(
     input: *const u8,
     input_len: usize,
     output: *mut *mut u8,
@@ -54,8 +56,7 @@ fn ngenrs_z_compress(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" 
-fn ngenrs_z_decompress(
+pub extern "C" fn ngenrs_z_decompress(
     input: *const u8,
     input_len: usize,
     output: *mut *mut u8,

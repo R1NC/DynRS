@@ -30,7 +30,10 @@ pub fn compress<R: Read>(reader: R, format: CompressionFormat) -> io::Result<Vec
     }
 }
 
-pub fn decompress<R: Read + BufRead + 'static>(reader: R, format: CompressionFormat) -> io::Result<Vec<u8>> {
+pub fn decompress<R: Read + BufRead + 'static>(
+    reader: R,
+    format: CompressionFormat,
+) -> io::Result<Vec<u8>> {
     let mut result = Vec::new();
     let decoder = match format {
         CompressionFormat::Gzip => Box::new(bufread::GzDecoder::new(reader)) as Box<dyn Read>,
@@ -45,7 +48,9 @@ fn process_stream<R: Read, W: Write>(mut reader: R, mut writer: W) -> io::Result
     let mut buffer = vec![0; BUFFER_SIZE];
     loop {
         let bytes_read = reader.read(&mut buffer)?;
-        if bytes_read == 0 { break; }
+        if bytes_read == 0 {
+            break;
+        }
         writer.write_all(&buffer[..bytes_read])?;
     }
     Ok(())

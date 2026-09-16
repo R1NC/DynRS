@@ -32,3 +32,4 @@ base64 = "0.22.1"
 flate2 = { version = "1.0", features = ["zlib"] }
 mlua = { version = "0.9.9", features = ["lua54", "vendored"] }
 libquickjs-ng-sys = "0.8"
+aes-gcm = "0.11.1"

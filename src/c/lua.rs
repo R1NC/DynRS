@@ -1,10 +1,9 @@
-use std::ffi::{c_char, c_void};
-use crate::c::util::{cstr_to_rust, rust_to_cstr, ngenrs_free_ptr, box_into_raw_new};
+use crate::c::util::{box_into_raw_new, cstr_to_rust, rust_to_cstr};
 use crate::core::lua::LuaBridge;
+use std::ffi::{c_char, c_void};
 
 #[unsafe(no_mangle)]
-pub extern "C" 
-fn ngenrs_lua_bridge_init() -> *mut c_void {
+pub extern "C" fn ngenrs_lua_bridge_init() -> *mut c_void {
     match LuaBridge::new() {
         Ok(bridge) => box_into_raw_new(bridge) as *mut c_void,
         Err(_) => std::ptr::null_mut(),
@@ -12,17 +11,14 @@ fn ngenrs_lua_bridge_init() -> *mut c_void {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" 
-fn ngenrs_lua_bridge_release(bridge: *mut c_void) {
-    ngenrs_free_ptr(bridge)
+pub extern "C" fn ngenrs_lua_bridge_release(bridge: *mut c_void) {
+    if !bridge.is_null() {
+        unsafe { drop(Box::from_raw(bridge as *mut LuaBridge)) };
+    }
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" 
-fn ngenrs_lua_load_file(
-    bridge: *mut c_void,
-    path: *const c_char,
-) -> bool {
+pub extern "C" fn ngenrs_lua_load_file(bridge: *mut c_void, path: *const c_char) -> bool {
     if bridge.is_null() || path.is_null() {
         return false;
     }
@@ -31,15 +27,11 @@ fn ngenrs_lua_load_file(
         Some(s) => s,
         None => return false,
     };
-    bridge.load_file(&path_str).is_ok()
+    bridge.load_file(path_str).is_ok()
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" 
-fn ngenrs_lua_load_string(
-    bridge: *mut c_void,
-    script: *const c_char,
-) -> bool {
+pub extern "C" fn ngenrs_lua_load_string(bridge: *mut c_void, script: *const c_char) -> bool {
     if bridge.is_null() || script.is_null() {
         return false;
     }
@@ -48,12 +40,11 @@ fn ngenrs_lua_load_string(
         Some(s) => s,
         None => return false,
     };
-    bridge.load_string(&script_str).is_ok()
+    bridge.load_string(script_str).is_ok()
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" 
-fn ngenrs_lua_call_function(
+pub extern "C" fn ngenrs_lua_call_function(
     bridge: *mut c_void,
     func_name: *const c_char,
     arg: *const c_char,

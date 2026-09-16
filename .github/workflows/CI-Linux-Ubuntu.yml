@@ -1,0 +1,69 @@
+name: CI-Linux-Ubuntu
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/CI-Linux-Ubuntu.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/CI-Linux-Ubuntu.yml'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    name: linux
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Detect libclang path
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="$(llvm-config --libdir 2>/dev/null || true)"
+          if [ -z "${dir}" ] || [ ! -e "${dir}/libclang.so" ]; then
+            dir="$(ls -d /usr/lib/llvm-*/lib 2>/dev/null | sort -V | tail -n1 || true)"
+          fi
+          if [ -n "${dir}" ] && [ -e "${dir}/libclang.so" ]; then
+            echo "LIBCLANG_PATH=${dir}" >> "${GITHUB_ENV}"
+            echo "LIBCLANG_PATH=${dir}"
+          else
+            echo "::warning::libclang.so not found, bindgen falls back to its own search"
+          fi
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-cargo-
+
+      - name: Build
+        run: cargo build --verbose --locked
+
+      - name: Test
+        run: cargo test --verbose --locked

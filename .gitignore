@@ -1,2 +1,3 @@
-Cargo.lock
+# Cargo.lock is tracked on purpose: this workspace ships the `qjsc` binary and a cdylib,
+# so CI builds with --locked against a pinned dependency set.
 target

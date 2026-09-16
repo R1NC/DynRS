@@ -1,0 +1,75 @@
+name: CI-macOS-Mac
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/CI-macOS-Mac.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/CI-macOS-Mac.yml'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  macos:
+    name: macos
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Detect libclang path
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="$(cd "$(dirname "$(xcrun --find clang)")/../lib" && pwd)"
+          if [ ! -e "${dir}/libclang.dylib" ]; then
+            prefix="$(brew --prefix llvm 2>/dev/null || true)"
+            if [ -n "${prefix}" ] && [ -e "${prefix}/lib/libclang.dylib" ]; then
+              dir="${prefix}/lib"
+            fi
+          fi
+          if [ -e "${dir}/libclang.dylib" ]; then
+            echo "LIBCLANG_PATH=${dir}" >> "${GITHUB_ENV}"
+            echo "LIBCLANG_PATH=${dir}"
+          else
+            echo "::warning::libclang.dylib not found, bindgen falls back to its own search"
+          fi
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-cargo-
+
+      # `macos-latest` is arm64, and `.cargo/config.toml` gives that triple the flags used for
+      # packaging the static lib (`-C link-arg=-static`), which break linking an ordinary host
+      # binary. They are cleared for this workflow only; packaging keeps using them.
+      - name: Build
+        run: cargo build --verbose --locked --config 'target.aarch64-apple-darwin.rustflags=[]'
+
+      - name: Test
+        run: cargo test --verbose --locked --config 'target.aarch64-apple-darwin.rustflags=[]'

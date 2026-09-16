@@ -1,8 +1,8 @@
 use crate::c::util::{cstr_to_rust, ngenrs_free_cstr, rust_to_cstr};
 use libquickjs_ng_sys::{
     JS_Call, JS_Eval, JS_FreeValue, JS_GetException, JS_GetGlobalObject, JS_GetPropertyStr,
-    JS_HasException, JS_NewContext, JS_NewRuntime, JS_NewStringLen, JS_SetPropertyStr,
-    JSContext, JSRuntime, JSValue,
+    JS_HasException, JS_NewContext, JS_NewRuntime, JS_NewStringLen, JS_SetPropertyStr, JSContext,
+    JSRuntime, JSValue,
 };
 use std::ffi::CString;
 use std::fs;
@@ -14,6 +14,15 @@ pub struct JSBridge {
     ctx: Arc<Mutex<*mut JSContext>>,
 }
 
+impl Default for JSBridge {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// QuickJS is single threaded and its pointers are neither `Send` nor `Sync`, so these `Arc`s
+// only share the engine between owners on one thread; the C ABI keeps that contract.
+#[allow(clippy::arc_with_non_send_sync)]
 impl JSBridge {
     pub fn new() -> Self {
         unsafe {

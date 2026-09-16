@@ -1,0 +1,65 @@
+name: CI-Windows-Win
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/CI-Windows-Win.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/CI-Windows-Win.yml'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: windows
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Detect libclang path
+        shell: pwsh
+        run: |
+          $libclang = (where.exe libclang.dll | Select-Object -First 1).Trim()
+          if (-not $libclang) {
+            throw "libclang.dll not found on PATH"
+          }
+          $dir = Split-Path -Parent $libclang
+          "LIBCLANG_PATH=$dir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "LIBCLANG_PATH=$dir"
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-cargo-
+
+      - name: Build
+        run: cargo build --verbose --locked
+
+      - name: Test
+        run: cargo test --verbose --locked

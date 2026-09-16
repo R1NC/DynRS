@@ -1,14 +1,218 @@
+use std::borrow::Borrow;
 use std::collections::HashMap;
-use std::path::Path;
+use std::net::{IpAddr, SocketAddr};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard, OnceLock};
+
+use futures::StreamExt;
 use reqwest::Client;
 use reqwest::header::HeaderMap;
 use reqwest::multipart;
-use futures::StreamExt;
-use std::borrow::Borrow;
 use serde_json::Value;
 
+/// Mirrors DynXX's global TLS certificate setting (`dynxx_net_http_set_cert_path`).
+#[derive(Clone, Default, PartialEq, Eq)]
+pub enum CertConfig {
+    /// Never configured. Keeps the platform trust store, which is what a plain
+    /// `reqwest`/`native-tls` build does.
+    #[default]
+    Default,
+    /// Verify peers against this CA bundle.
+    Path(PathBuf),
+    /// Explicitly configured with an empty path, which disables peer verification --
+    /// the behaviour DynXX applies whenever no cert path is set. DynRS only disables
+    /// verification when a caller asks for it explicitly.
+    Disabled,
+}
+
+/// Mirrors `DynXXHttpProxyConfig`.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ProxyConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+}
+
+/// Mirrors `DynXXHttpDnsConfig`: pins a host name to a fixed address, the way
+/// `/etc/hosts` does.
+///
+/// `port` is kept for C-ABI parity with DynXX, which feeds curl's `CURLOPT_RESOLVE`
+/// list where an entry is a host+port pair. `reqwest` on the other hand looks an
+/// override up by host name only and `hyper` always takes the port from the URL, so
+/// DynRS cannot match on a port: an override applies to every port of its host, while
+/// hosts without an override are resolved normally.
+#[derive(Clone, PartialEq, Eq)]
+pub struct DnsConfig {
+    pub host: String,
+    pub port: u16,
+    /// A numeric IP address. `set_dns_configs` drops entries whose address cannot be
+    /// parsed, because a resolver can only answer with socket addresses.
+    pub address: String,
+}
+
+#[derive(Clone, Default)]
+struct HttpGlobalConfig {
+    cert: CertConfig,
+    proxy: Option<ProxyConfig>,
+    dns: Vec<DnsConfig>,
+}
+
+static GLOBAL_CONFIG: OnceLock<Mutex<HttpGlobalConfig>> = OnceLock::new();
+static CONFIG_VERSION: AtomicU64 = AtomicU64::new(0);
+static CACHED_CLIENT: OnceLock<Mutex<Option<(u64, Client)>>> = OnceLock::new();
+
+/// Serializes the tests that touch the process-wide config, so that one test's
+/// `set_*` call cannot land between another test's reads.
+#[cfg(test)]
+pub(crate) static CONFIG_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+fn global_config() -> MutexGuard<'static, HttpGlobalConfig> {
+    GLOBAL_CONFIG
+        .get_or_init(|| Mutex::new(HttpGlobalConfig::default()))
+        .lock()
+        .unwrap()
+}
+
+/// A copy of the global config, only used by the tests.
+#[cfg(test)]
+pub(crate) fn config_snapshot() -> (CertConfig, Option<ProxyConfig>, Vec<DnsConfig>) {
+    let config = global_config();
+    (
+        config.cert.clone(),
+        config.proxy.clone(),
+        config.dns.clone(),
+    )
+}
+
+/// Mirrors `dynxx_net_http_set_cert_path`: `None` or an empty path disables peer
+/// verification, any other value is used as the CA bundle.
+pub fn set_cert_path(path: Option<&str>) {
+    {
+        let mut config = global_config();
+        config.cert = match path {
+            Some(path) if !path.is_empty() => CertConfig::Path(PathBuf::from(path)),
+            _ => CertConfig::Disabled,
+        };
+    }
+    CONFIG_VERSION.fetch_add(1, Ordering::SeqCst);
+}
+
+/// Mirrors `dynxx_net_http_set_proxy`: `None` or an empty host clears the proxy.
+pub fn set_proxy(host: Option<&str>, port: u16, username: &str, password: &str) {
+    {
+        let mut config = global_config();
+        config.proxy = match host {
+            Some(host) if !host.is_empty() => Some(ProxyConfig {
+                host: host.to_string(),
+                port,
+                username: username.to_string(),
+                password: password.to_string(),
+            }),
+            _ => None,
+        };
+    }
+    CONFIG_VERSION.fetch_add(1, Ordering::SeqCst);
+}
+
+/// Mirrors `dynxx_net_http_set_dns_configs`: an empty list clears the overrides.
+/// Entries with an empty host or with an address that is not a literal IP are skipped,
+/// mirroring how DynXX drops invalid configs.
+pub fn set_dns_configs(configs: &[DnsConfig]) {
+    {
+        let mut config = global_config();
+        config.dns = configs
+            .iter()
+            .filter(|cfg| !cfg.host.is_empty() && cfg.address.parse::<IpAddr>().is_ok())
+            .cloned()
+            .collect();
+    }
+    CONFIG_VERSION.fetch_add(1, Ordering::SeqCst);
+}
+
+fn build_client(
+    cert: &CertConfig,
+    proxy: Option<&ProxyConfig>,
+    dns: &[DnsConfig],
+) -> Result<Client, Box<dyn std::error::Error>> {
+    let mut builder = reqwest::Client::builder();
+
+    builder = match cert {
+        CertConfig::Default => builder,
+        CertConfig::Disabled => builder.danger_accept_invalid_certs(true),
+        CertConfig::Path(path) => {
+            let cert = std::fs::read(path)?;
+            builder.add_root_certificate(reqwest::Certificate::from_pem(&cert)?)
+        }
+    };
+
+    if let Some(proxy) = proxy {
+        // DynXX passes `host[:port]` straight to curl; reqwest needs a URL with a scheme.
+        let mut url = if proxy.host.contains("://") {
+            proxy.host.clone()
+        } else {
+            format!("http://{}", proxy.host)
+        };
+        if proxy.port != 0 {
+            url.push_str(&format!(":{}", proxy.port));
+        }
+        let mut reqwest_proxy = reqwest::Proxy::all(&url)?;
+        if !proxy.username.is_empty() {
+            reqwest_proxy = reqwest_proxy.basic_auth(&proxy.username, &proxy.password);
+        }
+        builder = builder.proxy(reqwest_proxy);
+    }
+
+    // Each entry pins a host name to a fixed address, the way DynXX feeds curl's
+    // `CURLOPT_RESOLVE` list. Later entries win for the same host, matching the map
+    // insert that `ClientBuilder::resolve` performs.
+    for config in dns {
+        if let Ok(address) = config.address.parse::<IpAddr>() {
+            builder = builder.resolve(&config.host, SocketAddr::new(address, config.port));
+        }
+    }
+
+    Ok(builder.build()?)
+}
+
+/// The client bound to the current global config. It is rebuilt whenever the config
+/// changes; cloning a `reqwest::Client` is cheap (it is refcounted internally).
+fn global_client() -> Result<Client, Box<dyn std::error::Error>> {
+    let version = CONFIG_VERSION.load(Ordering::SeqCst);
+    let cache = CACHED_CLIENT.get_or_init(|| Mutex::new(None));
+
+    {
+        let cached = cache.lock().unwrap();
+        if let Some((cached_version, client)) = cached.as_ref()
+            && *cached_version == version
+        {
+            return Ok(client.clone());
+        }
+    }
+
+    let (cert, proxy, dns) = {
+        let config = global_config();
+        (
+            config.cert.clone(),
+            config.proxy.clone(),
+            config.dns.clone(),
+        )
+    };
+    let client = build_client(&cert, proxy.as_ref(), &dns)?;
+
+    let mut cached = cache.lock().unwrap();
+    *cached = Some((version, client.clone()));
+    Ok(client)
+}
+
+/// One multipart field of an upload: name, data, optional MIME type and file name.
+pub type UploadPart = (String, Vec<u8>, Option<String>, Option<String>);
+
 pub struct HttpClient {
-    client: Client,
+    /// Set when the caller passed an explicit cert path to `new`; such a handle keeps a
+    /// fixed client and ignores the global config.
+    fixed_client: Option<Client>,
 }
 
 pub struct HttpResponse {
@@ -19,19 +223,25 @@ pub struct HttpResponse {
 
 impl HttpClient {
     pub fn new(ca_cert_path: Option<&Path>) -> Result<Self, Box<dyn std::error::Error>> {
-        let mut builder = reqwest::Client::builder()
-            .danger_accept_invalid_certs(false);
+        let fixed_client = match ca_cert_path {
+            // A fixed client keeps its own TLS setting and ignores the global proxy
+            // and DNS configs, so it is built with those turned off.
+            Some(path) => Some(build_client(
+                &CertConfig::Path(path.to_path_buf()),
+                None,
+                &[],
+            )?),
+            None => None,
+        };
+        Ok(Self { fixed_client })
+    }
 
-        if let Some(cert_path) = ca_cert_path {
-            let cert = std::fs::read(cert_path)?;
-            builder = builder.add_root_certificate(
-                reqwest::Certificate::from_pem(&cert)?
-            );
+    /// Resolves the client for a request: the fixed one, or the global-config one.
+    fn client(&self) -> Result<Client, Box<dyn std::error::Error>> {
+        match &self.fixed_client {
+            Some(client) => Ok(client.clone()),
+            None => global_client(),
         }
-
-        Ok(Self {
-            client: builder.build()?
-        })
     }
 
     async fn execute_request(
@@ -60,7 +270,8 @@ impl HttpClient {
         K: Borrow<str>,
         V: Borrow<str>,
     {
-        let mut request = self.client.get(url);
+        let client = self.client()?;
+        let mut request = client.get(url);
 
         if let Some(headers_map) = headers {
             for (key, value) in headers_map {
@@ -86,7 +297,8 @@ impl HttpClient {
         K: Borrow<str>,
         V: Borrow<str>,
     {
-        let mut request = self.client.post(url);
+        let client = self.client()?;
+        let mut request = client.post(url);
 
         if let Some(headers_map) = headers {
             for (key, value) in headers_map {
@@ -95,7 +307,8 @@ impl HttpClient {
         }
 
         if let Some(params_map) = params {
-            let json_map = params_map.into_iter()
+            let json_map = params_map
+                .into_iter()
                 .filter_map(|(k, v)| {
                     serde_json::from_str::<Value>(v.borrow())
                         .map(|val| (k.borrow().to_string(), val))
@@ -120,7 +333,8 @@ impl HttpClient {
         K: Borrow<str>,
         V: Borrow<str>,
     {
-        let mut request = self.client.get(url);
+        let client = self.client()?;
+        let mut request = client.get(url);
 
         if let Some(headers_map) = headers {
             for (key, value) in headers_map {
@@ -152,13 +366,14 @@ impl HttpClient {
         &self,
         url: &str,
         headers: Option<HashMap<K, V>>,
-        parts: Vec<(String, Vec<u8>, Option<String>, Option<String>)>,
+        parts: Vec<UploadPart>,
     ) -> Result<HttpResponse, Box<dyn std::error::Error>>
     where
         K: Borrow<str>,
         V: Borrow<str>,
     {
-        let mut request = self.client.post(url);
+        let client = self.client()?;
+        let mut request = client.post(url);
 
         if let Some(headers_map) = headers {
             for (key, value) in headers_map {
@@ -182,5 +397,109 @@ impl HttpClient {
 
         request = request.multipart(form);
         self.execute_request(request).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lock_config() -> MutexGuard<'static, ()> {
+        CONFIG_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Puts the process-wide config back to a baseline, so that no test depends on what
+    /// another test left behind, or on the order the tests happen to run in.
+    fn reset_config() {
+        set_cert_path(None);
+        set_proxy(None, 0, "", "");
+        set_dns_configs(&[]);
+    }
+
+    #[test]
+    fn cert_and_proxy_config_lifecycle() {
+        let _guard = lock_config();
+        reset_config();
+
+        // A null/empty cert path disables verification, mirroring DynXX.
+        set_cert_path(None);
+        assert!(matches!(global_config().cert, CertConfig::Disabled));
+
+        // Any other path is used as the CA bundle.
+        set_cert_path(Some("/tmp/ca.pem"));
+        assert!(matches!(global_config().cert, CertConfig::Path(_)));
+
+        set_proxy(Some("127.0.0.1"), 8888, "user", "pwd");
+        {
+            let proxy = global_config().proxy.clone().expect("proxy should be set");
+            assert_eq!(proxy.host, "127.0.0.1");
+            assert_eq!(proxy.port, 8888);
+            assert_eq!(proxy.username, "user");
+            assert_eq!(proxy.password, "pwd");
+        }
+
+        // A null/empty host clears the proxy.
+        set_proxy(Some(""), 0, "", "");
+        assert!(global_config().proxy.is_none());
+        set_proxy(None, 0, "", "");
+        assert!(global_config().proxy.is_none());
+    }
+
+    #[test]
+    fn dns_configs_are_validated_and_versioned() {
+        let _guard = lock_config();
+        reset_config();
+
+        set_dns_configs(&[
+            DnsConfig {
+                host: "pinned.test".to_string(),
+                port: 443,
+                address: "10.1.2.3".to_string(),
+            },
+            // An empty host is dropped, like DynXX does.
+            DnsConfig {
+                host: String::new(),
+                port: 443,
+                address: "10.1.2.4".to_string(),
+            },
+            // So is an address no resolver could ever answer with.
+            DnsConfig {
+                host: "broken.test".to_string(),
+                port: 0,
+                address: "not-an-ip".to_string(),
+            },
+        ]);
+
+        let (_, _, dns) = config_snapshot();
+        assert_eq!(dns.len(), 1);
+        assert_eq!(dns[0].host, "pinned.test");
+        assert_eq!(dns[0].address, "10.1.2.3");
+
+        let version = CONFIG_VERSION.load(Ordering::SeqCst);
+        global_client().expect("client builds with DNS overrides");
+        assert_eq!(CONFIG_VERSION.load(Ordering::SeqCst), version);
+
+        // An empty list clears the overrides again.
+        set_dns_configs(&[]);
+        let (_, _, dns) = config_snapshot();
+        assert!(dns.is_empty());
+        assert!(CONFIG_VERSION.load(Ordering::SeqCst) > version);
+        global_client().expect("client rebuilds without DNS overrides");
+    }
+
+    #[test]
+    fn config_change_invalidates_cached_client() {
+        let _guard = lock_config();
+        reset_config();
+
+        let version = CONFIG_VERSION.load(Ordering::SeqCst);
+        global_client().expect("client builds with the global config");
+        assert_eq!(CONFIG_VERSION.load(Ordering::SeqCst), version);
+
+        set_proxy(Some("127.0.0.1"), 1, "u", "p");
+        assert!(CONFIG_VERSION.load(Ordering::SeqCst) > version);
+        global_client().expect("client rebuilds after a config change");
     }
 }
