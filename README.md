@@ -4,7 +4,7 @@ A cross-platform framework based on Rust, supporting biz dev via Lua & JS.
 
 > :point_right: The modern C++ version: [DynXX](https://github.com/R1NC/DynXX).
 
-## :rocket: CI Status
+## :construction_worker: CI Status
 
 [![windows](https://img.shields.io/github/actions/workflow/status/R1NC/DynRS/CI-Windows-Win.yml?branch=main&label=windows)](https://github.com/R1NC/DynRS/actions/workflows/CI-Windows-Win.yml)
 [![linux](https://img.shields.io/github/actions/workflow/status/R1NC/DynRS/CI-Linux-Ubuntu.yml?branch=main&label=linux)](https://github.com/R1NC/DynRS/actions/workflows/CI-Linux-Ubuntu.yml)
@@ -13,7 +13,7 @@ A cross-platform framework based on Rust, supporting biz dev via Lua & JS.
 [![ohos](https://img.shields.io/github/actions/workflow/status/R1NC/DynRS/CI-OHOS-Ubuntu.yml?branch=main&label=ohos)](https://github.com/R1NC/DynRS/actions/workflows/CI-OHOS-Ubuntu.yml)
 [![wasm](https://img.shields.io/github/actions/workflow/status/R1NC/DynRS/CI-WASM-Ubuntu.yml?branch=main&label=wasm)](https://github.com/R1NC/DynRS/actions/workflows/CI-WASM-Ubuntu.yml)
 
-## :clipboard: Status
+## :clipboard: Progress
 
 | Module | Core | C ABI | Unit tests | Compared with DynXX |
 | :-- | :--: | :--: | :--: | :-- |
