@@ -1,0 +1,111 @@
+name: CI-OHOS-Ubuntu
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/CI-OHOS-Ubuntu.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/CI-OHOS-Ubuntu.yml'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  OHOS_SDK_VERSION: 26.0.0.38
+
+# OpenHarmony, arm64-v8a, static library only, on one Ubuntu host. DynXX's OHOS build ships the
+# same single ABI, and its tests cannot run for the target either.
+#
+# The SDK is the public HarmonyOS one, from the same mirror DynXX uses, and it is cached so only
+# the first run pays for the download.
+
+jobs:
+  ohos:
+    name: ohos (arm64-v8a)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-ohos
+
+      - name: Detect libclang path
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="$(llvm-config --libdir 2>/dev/null || true)"
+          if [ -z "${dir}" ] || [ ! -e "${dir}/libclang.so" ]; then
+            dir="$(ls -d /usr/lib/llvm-*/lib 2>/dev/null | sort -V | tail -n1 || true)"
+          fi
+          if [ -n "${dir}" ] && [ -e "${dir}/libclang.so" ]; then
+            echo "LIBCLANG_PATH=${dir}" >> "${GITHUB_ENV}"
+            echo "LIBCLANG_PATH=${dir}"
+          else
+            echo "::warning::libclang.so not found, bindgen falls back to its own search"
+          fi
+
+      - name: Cache HarmonyOS SDK
+        id: cache-ohos-sdk
+        uses: actions/cache@v4
+        with:
+          path: ohos-sdk/linux/native
+          key: ohos-sdk-linux-${{ env.OHOS_SDK_VERSION }}-${{ runner.os }}
+          restore-keys: |
+            ohos-sdk-linux-${{ env.OHOS_SDK_VERSION }}-
+
+      - name: Setup HarmonyOS SDK
+        if: steps.cache-ohos-sdk.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL -o ohos-sdk.tar.gz \
+            "https://mirrors.huaweicloud.com/harmonyos/os/7.0-Release/ohos-sdk-windows_linux-public_20260829.tar.gz"
+          tar -xzf ohos-sdk.tar.gz
+          rm ohos-sdk.tar.gz
+          cd ohos-sdk/linux
+          unzip -q "native-linux-x64-${OHOS_SDK_VERSION}-Release.zip"
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-ohos-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-ohos-cargo-
+
+      # The OHOS clang compiles the vendored C (SQLite, Lua, QuickJS, zlib) against the sysroot of
+      # the SDK, and its llvm-ar is what archives the result. The manifest declares a static
+      # library, so nothing gets linked against the OHOS libraries.
+      - name: Build the static library
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk="${GITHUB_WORKSPACE}/ohos-sdk/linux/native"
+          export PATH="${sdk}/llvm/bin:${PATH}"
+          export CC_aarch64_unknown_linux_ohos="${sdk}/llvm/bin/clang"
+          export AR_aarch64_unknown_linux_ohos="${sdk}/llvm/bin/llvm-ar"
+          export CFLAGS_aarch64_unknown_linux_ohos="--target=aarch64-linux-ohos --sysroot=${sdk}/sysroot"
+          export BINDGEN_EXTRA_CLANG_ARGS_aarch64_unknown_linux_ohos="--sysroot=${sdk}/sysroot"
+          cargo build --release --lib --locked --target aarch64-unknown-linux-ohos
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: OHOS-arm64-v8a-build
+          path: target/aarch64-unknown-linux-ohos/release/libdynrs.a
+          if-no-files-found: error

@@ -63,3 +63,16 @@ jobs:
 
       - name: Test
         run: cargo test --verbose --locked
+
+      # What people download from a run: the release static library and the qjsc compiler.
+      - name: Build release artifacts
+        run: cargo build --release --verbose --locked
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-Win-build
+          path: |
+            target/release/dynrs.lib
+            target/release/qjsc.exe
+          if-no-files-found: error

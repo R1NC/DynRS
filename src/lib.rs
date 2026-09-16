@@ -3,6 +3,9 @@ pub mod core {
     pub mod db;
     pub mod kv;
     pub mod lua;
+    // DynXX leaves curl out of its Emscripten build, so the wasm targets leave the network out
+    // too; every other module builds there.
+    #[cfg(not(target_arch = "wasm32"))]
     pub mod net;
     pub mod qjs;
     pub mod timer;
@@ -18,6 +21,7 @@ pub mod c {
     pub mod db;
     pub mod kv;
     pub mod lua;
+    #[cfg(not(target_arch = "wasm32"))]
     pub mod net;
     pub mod qjs;
     pub mod util;

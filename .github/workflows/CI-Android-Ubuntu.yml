@@ -1,0 +1,122 @@
+name: CI-Android-Ubuntu
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/CI-Android-Ubuntu.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/CI-Android-Ubuntu.yml'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+# One Ubuntu host, every Android ABI, library only: the tests of this crate run on the host, so
+# this target is a build check (the same shape as DynXX's Android workflow).
+
+jobs:
+  android:
+    name: android (${{ matrix.abi }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      # Every ABI reports its own result instead of the first failure hiding the rest.
+      fail-fast: false
+      matrix:
+        include:
+          - target: armv7-linux-androideabi
+            abi: armeabi-v7a
+            clang: armv7a-linux-androideabi24-clang
+          - target: aarch64-linux-android
+            abi: arm64-v8a
+            clang: aarch64-linux-android24-clang
+          - target: i686-linux-android
+            abi: x86
+            clang: i686-linux-android24-clang
+          - target: x86_64-linux-android
+            abi: x86_64
+            clang: x86_64-linux-android24-clang
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Detect libclang path
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="$(llvm-config --libdir 2>/dev/null || true)"
+          if [ -z "${dir}" ] || [ ! -e "${dir}/libclang.so" ]; then
+            dir="$(ls -d /usr/lib/llvm-*/lib 2>/dev/null | sort -V | tail -n1 || true)"
+          fi
+          if [ -n "${dir}" ] && [ -e "${dir}/libclang.so" ]; then
+            echo "LIBCLANG_PATH=${dir}" >> "${GITHUB_ENV}"
+            echo "LIBCLANG_PATH=${dir}"
+          else
+            echo "::warning::libclang.so not found, bindgen falls back to its own search"
+          fi
+
+      # The runner image ships the Android SDK with at least one NDK, and the NDK is what compiles
+      # the vendored C for each ABI.
+      - name: Detect the Android NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          ndk="${ANDROID_NDK_LATEST_HOME:-}"
+          if [ ! -d "${ndk}" ]; then
+            ndk="$(ls -d "${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"/ndk/* 2>/dev/null | sort -V | tail -n1 || true)"
+          fi
+          if [ ! -d "${ndk}" ]; then
+            echo "::error::no Android NDK was found on this runner"
+            exit 1
+          fi
+          echo "ANDROID_NDK_HOME=${ndk}" >> "${GITHUB_ENV}"
+          echo "ANDROID_NDK_HOME=${ndk}"
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-android-${{ matrix.abi }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-android-${{ matrix.abi }}-cargo-
+
+      # The vendored C (SQLite, Lua, QuickJS, zlib) is compiled with the NDK toolchain, whose
+      # `llvm-ar` also archives the result. The manifest declares a static library, so nothing is
+      # linked against the Android libraries.
+      - name: Build the static library
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          ndk="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64"
+          export PATH="${ndk}/bin:${PATH}"
+          underscore="${TARGET//-/_}"
+          export "CC_${underscore}=${ndk}/bin/${{ matrix.clang }}"
+          export "AR_${underscore}=${ndk}/bin/llvm-ar"
+          cargo build --release --lib --locked --target "${TARGET}"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Android-${{ matrix.abi }}-build
+          path: target/${{ matrix.target }}/release/libdynrs.a
+          if-no-files-found: error

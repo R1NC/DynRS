@@ -70,3 +70,16 @@ jobs:
 
       - name: Test
         run: cargo test --verbose --locked
+
+      # What people download from a run: the release static library and the qjsc compiler.
+      - name: Build release artifacts
+        run: cargo build --release --verbose --locked
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macOS-Mac-build
+          path: |
+            target/release/libdynrs.a
+            target/release/qjsc
+          if-no-files-found: error

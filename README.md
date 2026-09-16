@@ -1,12 +1,17 @@
 # DynRS
 
-[![windows](https://img.shields.io/github/actions/workflow/status/R1NC/DynRS/CI-Windows-Win.yml?branch=main&label=windows-CI)](https://github.com/R1NC/DynRS/actions/workflows/CI-Windows-Win.yml)
-[![linux](https://img.shields.io/github/actions/workflow/status/R1NC/DynRS/CI-Linux-Ubuntu.yml?branch=main&label=linux-CI)](https://github.com/R1NC/DynRS/actions/workflows/CI-Linux-Ubuntu.yml)
-[![macos](https://img.shields.io/github/actions/workflow/status/R1NC/DynRS/CI-macOS-Mac.yml?branch=main&label=macos-CI)](https://github.com/R1NC/DynRS/actions/workflows/CI-macOS-Mac.yml)
-
 A cross-platform framework based on Rust, supporting biz dev via Lua & JS.
 
 > :point_right: The modern C++ version: [DynXX](https://github.com/R1NC/DynXX).
+
+## :rocket: CI Status
+
+[![windows](https://img.shields.io/github/actions/workflow/status/R1NC/DynRS/CI-Windows-Win.yml?branch=main&label=windows)](https://github.com/R1NC/DynRS/actions/workflows/CI-Windows-Win.yml)
+[![linux](https://img.shields.io/github/actions/workflow/status/R1NC/DynRS/CI-Linux-Ubuntu.yml?branch=main&label=linux)](https://github.com/R1NC/DynRS/actions/workflows/CI-Linux-Ubuntu.yml)
+[![macos](https://img.shields.io/github/actions/workflow/status/R1NC/DynRS/CI-macOS-Mac.yml?branch=main&label=macos)](https://github.com/R1NC/DynRS/actions/workflows/CI-macOS-Mac.yml)
+[![android](https://img.shields.io/github/actions/workflow/status/R1NC/DynRS/CI-Android-Ubuntu.yml?branch=main&label=android)](https://github.com/R1NC/DynRS/actions/workflows/CI-Android-Ubuntu.yml)
+[![ohos](https://img.shields.io/github/actions/workflow/status/R1NC/DynRS/CI-OHOS-Ubuntu.yml?branch=main&label=ohos)](https://github.com/R1NC/DynRS/actions/workflows/CI-OHOS-Ubuntu.yml)
+[![wasm](https://img.shields.io/github/actions/workflow/status/R1NC/DynRS/CI-WASM-Ubuntu.yml?branch=main&label=wasm)](https://github.com/R1NC/DynRS/actions/workflows/CI-WASM-Ubuntu.yml)
 
 ## :clipboard: Status
 
@@ -24,7 +29,7 @@ A cross-platform framework based on Rust, supporting biz dev via Lua & JS.
 * :heavy_check_mark: : Done;
 * :x: : To do;
 
-> **Unfixed advisory**: RSA decryption is not constant time, the `rsa` crate has no patch for the Marvin timing sidechannel (`RUSTSEC-2023-0071`). That advisory does not cover the OpenSSL RSA DynXX uses. CI keeps the dependency policy of `deny.toml`, where this is the only ignored advisory.
+> **Unfixed advisory**: RSA decryption is not constant time, the `rsa` crate has no patch for the Marvin timing sidechannel (`RUSTSEC-2023-0071`). That advisory does not cover the OpenSSL RSA DynXX uses.
 
 ## :hammer_and_wrench: Build
 
@@ -33,7 +38,7 @@ A cross-platform framework based on Rust, supporting biz dev via Lua & JS.
 * A C toolchain for the vendored QuickJS, Lua and SQLite.
 
 ```bash
-cargo build                                 # staticlib + cdylib, plus the qjsc tool
+cargo build                                 # the static library, plus the qjsc tool
 cargo test
 cargo fmt --all --check
 cargo clippy --all-targets -- -D warnings

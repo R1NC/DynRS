@@ -1,0 +1,103 @@
+name: CI-WASM-Ubuntu
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/CI-WASM-Ubuntu.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/CI-WASM-Ubuntu.yml'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+# Emscripten, the same toolchain DynXX builds its wasm target with. Nothing here depends on the
+# host, so a single runner is enough.
+#
+# The network module is left out of this target: it needs a socket stack and a native TLS backend
+# that wasm does not have, which is why DynXX leaves curl out of its Emscripten build as well.
+# Every other module (crypto, SQLite, key-value, zip, Lua, JS) is built here.
+
+jobs:
+  wasm:
+    name: wasm
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-emscripten
+
+      - name: Setup Emscripten
+        uses: emscripten-core/setup-emsdk@v16
+        with:
+          version: 3.1.65
+
+      # bindgen, which reads the QuickJS headers for the Rust side, parses them with libclang, so
+      # it has to be pointed at the C headers of the target.
+      - name: Point bindgen at the Emscripten sysroot
+        shell: bash
+        run: |
+          set -euo pipefail
+          sysroot="${EMSDK}/upstream/emscripten/cache/sysroot"
+          if [ ! -d "${sysroot}" ]; then
+            sysroot="${EMSDK}/upstream/emscripten/system"
+          fi
+          if [ -d "${sysroot}" ]; then
+            echo "BINDGEN_EXTRA_CLANG_ARGS_wasm32_unknown_emscripten=--sysroot=${sysroot}" >> "${GITHUB_ENV}"
+          fi
+
+      - name: Detect libclang path
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="$(llvm-config --libdir 2>/dev/null || true)"
+          if [ -z "${dir}" ] || [ ! -e "${dir}/libclang.so" ]; then
+            dir="$(ls -d /usr/lib/llvm-*/lib 2>/dev/null | sort -V | tail -n1 || true)"
+          fi
+          if [ -n "${dir}" ] && [ -e "${dir}/libclang.so" ]; then
+            echo "LIBCLANG_PATH=${dir}" >> "${GITHUB_ENV}"
+            echo "LIBCLANG_PATH=${dir}"
+          else
+            echo "::warning::libclang.so not found, bindgen falls back to its own search"
+          fi
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-wasm-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-wasm-cargo-
+
+      # The vendored C (SQLite, Lua, QuickJS, zlib) has to be compiled with the Emscripten
+      # wrappers instead of the host toolchain. A `.wasm` module is a cdylib, so this asks for that
+      # crate type even though the manifest declares a static library.
+      - name: Build
+        env:
+          CC_wasm32_unknown_emscripten: emcc
+          AR_wasm32_unknown_emscripten: emar
+        run: cargo rustc --release --lib --crate-type cdylib --locked --target wasm32-unknown-emscripten
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: WASM-Ubuntu-build
+          path: target/wasm32-unknown-emscripten/release/*.wasm
+          if-no-files-found: error
