@@ -127,7 +127,7 @@ jobs:
           export CC_aarch64_unknown_linux_ohos="${sdk}/llvm/bin/clang"
           export AR_aarch64_unknown_linux_ohos="${sdk}/llvm/bin/llvm-ar"
           export CFLAGS_aarch64_unknown_linux_ohos="--target=aarch64-linux-ohos --sysroot=${sdk}/sysroot"
-          export BINDGEN_EXTRA_CLANG_ARGS_aarch64_unknown_linux_ohos="--sysroot=${sdk}/sysroot"
+          export BINDGEN_EXTRA_CLANG_ARGS_aarch64_unknown_linux_ohos="--target=aarch64-linux-ohos --sysroot=${sdk}/sysroot"
           cargo build --release --lib --locked --target aarch64-unknown-linux-ohos
 
       - name: Upload artifacts

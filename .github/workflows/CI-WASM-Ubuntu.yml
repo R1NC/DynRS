@@ -96,14 +96,23 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-wasm-cargo-
 
-      # The vendored C (SQLite, Lua, QuickJS, zlib) has to be compiled with the Emscripten
-      # wrappers instead of the host toolchain. A `.wasm` module is a cdylib, so this asks for that
-      # crate type even though the manifest declares a static library.
+      # The vendored C (SQLite, Lua, QuickJS, zlib) has to be compiled with the Emscripten wrappers
+      # instead of the host toolchain.
+      #
+      # A `.wasm` module is a cdylib, while the manifest ships a static library for every other
+      # target, so this run changes the manifest. Asking cargo for the crate type on the command
+      # line is not an option: `cargo rustc --crate-type` also applies it to the dependencies, and
+      # Emscripten then tries to link every one of them as its own side module.
       - name: Build
+        shell: bash
         env:
           CC_wasm32_unknown_emscripten: emcc
           AR_wasm32_unknown_emscripten: emar
-        run: cargo rustc --release --lib --crate-type cdylib --locked --target wasm32-unknown-emscripten
+        run: |
+          set -euo pipefail
+          sed -i 's/crate-type = \["staticlib"\]/crate-type = ["cdylib"]/' Cargo.toml
+          grep -n 'crate-type' Cargo.toml
+          cargo build --release --lib --locked --target wasm32-unknown-emscripten
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
