@@ -43,7 +43,20 @@ jobs:
       - name: Setup Emscripten
         uses: emscripten-core/setup-emsdk@v16
         with:
-          version: 3.1.65
+          version: 6.0.9
+
+      # emcc decides which wasm-opt flags to pass, so both have to come from the same SDK. The
+      # versions are printed here so a mismatch is not a mystery in the log.
+      - name: Show the Emscripten versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          emcc --version | head -n1
+          if [ -x "${EMSDK}/upstream/bin/wasm-opt" ]; then
+            "${EMSDK}/upstream/bin/wasm-opt" --version
+          else
+            echo "this SDK has no wasm-opt"
+          fi
 
       # `libquickjs-ng-sys` always compiles with plain clang (it ignores `CC`), and bindgen parses
       # the QuickJS headers with libclang, so both have to be pointed at the C headers of the

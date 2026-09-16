@@ -77,31 +77,42 @@ jobs:
           cd ohos-sdk/linux
           unzip -q "native-linux-x64-${OHOS_SDK_VERSION}-Release.zip"
 
-      # An OpenHarmony app links the OpenSSL of the system, so this uses the headers and the
-      # shared libraries of the SDK instead of building OpenSSL from source.
-      - name: Locate the SDK's OpenSSL
+      # The network module links the OpenSSL of the system, so this looks for it together with the
+      # toolchain. Nothing here is hard coded, because the SDK packages do not always unpack into
+      # the same directory names; the layout is printed so a wrong assumption is visible.
+      - name: Locate the HarmonyOS toolchain and OpenSSL
         shell: bash
         run: |
           set -euo pipefail
-          sdk="${GITHUB_WORKSPACE}/ohos-sdk/linux/native"
-          include_dir=""
-          for candidate in "${sdk}/sysroot/usr/include" "${sdk}/sysroot/usr/local/include"; do
-            if [ -f "${candidate}/openssl/ssl.h" ]; then include_dir="${candidate}"; break; fi
-          done
-          lib_dir=""
-          for candidate in "${sdk}/sysroot/usr/lib/aarch64-linux-ohos" "${sdk}/sysroot/usr/lib" "${sdk}/sysroot/usr/local/lib"; do
-            if ls "${candidate}"/libssl.so* > /dev/null 2>&1; then lib_dir="${candidate}"; break; fi
-          done
-          if [ -z "${include_dir}" ] || [ -z "${lib_dir}" ]; then
-            echo "::error::this HarmonyOS SDK has no OpenSSL (headers: '${include_dir}', libs: '${lib_dir}')"
+          sdk_root="${GITHUB_WORKSPACE}/ohos-sdk/linux"
+          echo "--- SDK layout ---"
+          find "${sdk_root}" -maxdepth 3 -type d | sort | head -n 40
+
+          clang="$(find "${sdk_root}" -maxdepth 6 -type f -name 'clang' -print -quit || true)"
+          llvm_ar="$(find "${sdk_root}" -maxdepth 6 -type f -name 'llvm-ar' -print -quit || true)"
+          ssl_h="$(find "${sdk_root}" -type f -path '*/openssl/ssl.h' -print -quit || true)"
+          ssl_lib="$(find "${sdk_root}" \( -name 'libssl.so*' -o -name 'libssl.a' \) -print -quit || true)"
+          echo "clang:   ${clang:-none}"
+          echo "llvm-ar: ${llvm_ar:-none}"
+          echo "ssl.h:   ${ssl_h:-none}"
+          echo "libssl:  ${ssl_lib:-none}"
+
+          if [ -z "${clang}" ] || [ -z "${llvm_ar}" ]; then
+            echo "::error::the HarmonyOS toolchain was not found in this SDK"
             exit 1
           fi
+          if [ -z "${ssl_h}" ] || [ -z "${ssl_lib}" ]; then
+            echo "::error::this HarmonyOS SDK has no OpenSSL, so the network module cannot be built here"
+            exit 1
+          fi
+
+          toolchain="$(dirname "${clang}")"
           {
-            echo "OPENSSL_INCLUDE_DIR=${include_dir}"
-            echo "OPENSSL_LIB_DIR=${lib_dir}"
+            echo "OHOS_TOOLCHAIN=${toolchain}"
+            echo "OHOS_SYSROOT=$(dirname "${toolchain}")/sysroot"
+            echo "OPENSSL_INCLUDE_DIR=$(dirname "$(dirname "${ssl_h}")")"
+            echo "OPENSSL_LIB_DIR=$(dirname "${ssl_lib}")"
           } >> "${GITHUB_ENV}"
-          echo "OpenSSL headers: ${include_dir}"
-          echo "OpenSSL libraries: ${lib_dir}"
 
       - name: Cache cargo registry and target
         uses: actions/cache@v4
@@ -122,12 +133,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sdk="${GITHUB_WORKSPACE}/ohos-sdk/linux/native"
-          export PATH="${sdk}/llvm/bin:${PATH}"
-          export CC_aarch64_unknown_linux_ohos="${sdk}/llvm/bin/clang"
-          export AR_aarch64_unknown_linux_ohos="${sdk}/llvm/bin/llvm-ar"
-          export CFLAGS_aarch64_unknown_linux_ohos="--target=aarch64-linux-ohos --sysroot=${sdk}/sysroot"
-          export BINDGEN_EXTRA_CLANG_ARGS_aarch64_unknown_linux_ohos="--target=aarch64-linux-ohos --sysroot=${sdk}/sysroot"
+          export PATH="${OHOS_TOOLCHAIN}:${PATH}"
+          export CC_aarch64_unknown_linux_ohos="${OHOS_TOOLCHAIN}/clang"
+          export AR_aarch64_unknown_linux_ohos="${OHOS_TOOLCHAIN}/llvm-ar"
+          export CFLAGS_aarch64_unknown_linux_ohos="--target=aarch64-linux-ohos --sysroot=${OHOS_SYSROOT}"
+          export BINDGEN_EXTRA_CLANG_ARGS_aarch64_unknown_linux_ohos="--target=aarch64-linux-ohos --sysroot=${OHOS_SYSROOT}"
+          # `.cargo/config.toml` has a section for this target too (its `${env.…}` is not expanded),
+          # so the environment - which takes precedence - is what supplies these.
+          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_LINKER="${OHOS_TOOLCHAIN}/clang"
+          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_AR="${OHOS_TOOLCHAIN}/llvm-ar"
+          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_RUSTFLAGS=""
           cargo build --release --lib --locked --target aarch64-unknown-linux-ohos
 
       - name: Upload artifacts

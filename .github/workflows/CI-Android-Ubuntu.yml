@@ -105,6 +105,12 @@ jobs:
           underscore="${TARGET//-/_}"
           export "CC_${underscore}=${ndk}/bin/aarch64-linux-android24-clang"
           export "AR_${underscore}=${ndk}/bin/llvm-ar"
+          # `.cargo/config.toml` points this target at a local NDK as well (its `${env.…}` is not
+          # expanded and the path is the macOS one), so all three settings are overridden through
+          # the environment, which takes precedence over the config file.
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${ndk}/bin/aarch64-linux-android24-clang"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_AR="${ndk}/bin/llvm-ar"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS=""
           cargo build --release --lib --locked --target "${TARGET}"
 
       - name: Upload artifacts
