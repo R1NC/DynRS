@@ -17,9 +17,12 @@ rustflags = [
   "-C", "link-arg=$(xcrun --sdk iphoneos --show-sdk-path)"
 ]
 
+# No `-static` for the macOS host triple: macOS cannot link executables statically
+# (`ld: library 'crt0.o' not found`), and build scripts, proc macros, the cdylib and the `qjsc`
+# binary all link. A `staticlib` needs no linker flags at all. Passing `--config` does not help
+# either, because cargo joins array values instead of replacing them.
 [target.aarch64-apple-darwin]
 linker = "clang"
-rustflags = ["-C", "link-arg=-static"]
 
 [target.wasm32-unknown-unknown]
 rustflags = [

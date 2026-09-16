@@ -1,9 +1,8 @@
 # DynRS
 
-[![common](https://img.shields.io/github/actions/workflow/status/R1NC/DynRS/Common.yml?branch=main&label=common)](https://github.com/R1NC/DynRS/actions/workflows/Common.yml)
-[![windows](https://img.shields.io/github/actions/workflow/status/R1NC/DynRS/CI-Windows-Win.yml?branch=main&label=windows)](https://github.com/R1NC/DynRS/actions/workflows/CI-Windows-Win.yml)
-[![linux](https://img.shields.io/github/actions/workflow/status/R1NC/DynRS/CI-Linux-Ubuntu.yml?branch=main&label=linux)](https://github.com/R1NC/DynRS/actions/workflows/CI-Linux-Ubuntu.yml)
-[![macos](https://img.shields.io/github/actions/workflow/status/R1NC/DynRS/CI-macOS-Mac.yml?branch=main&label=macos)](https://github.com/R1NC/DynRS/actions/workflows/CI-macOS-Mac.yml)
+[![windows](https://img.shields.io/github/actions/workflow/status/R1NC/DynRS/CI-Windows-Win.yml?branch=main&label=windows-CI)](https://github.com/R1NC/DynRS/actions/workflows/CI-Windows-Win.yml)
+[![linux](https://img.shields.io/github/actions/workflow/status/R1NC/DynRS/CI-Linux-Ubuntu.yml?branch=main&label=linux-CI)](https://github.com/R1NC/DynRS/actions/workflows/CI-Linux-Ubuntu.yml)
+[![macos](https://img.shields.io/github/actions/workflow/status/R1NC/DynRS/CI-macOS-Mac.yml?branch=main&label=macos-CI)](https://github.com/R1NC/DynRS/actions/workflows/CI-macOS-Mac.yml)
 
 A cross-platform framework based on Rust, supporting biz dev via Lua & JS.
 
@@ -27,7 +26,7 @@ The crate builds as a `staticlib` plus a `cdylib`, so one code base serves every
 | Network | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | `get` / `post` / `download` / `upload` instead of one `request`; CA path, proxy and DNS overrides included |
 | SQLite | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | |
 | Key-Value | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | `contains` / `remove` / `allKeys` / `clear` not ported yet |
-| Zip | :heavy_check_mark: | :heavy_check_mark: | :x: | |
+| Zip | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | one-shot `compress` / `decompress` only; DynXX's streaming `zip_init` / `input` / `process_do` API, its `FILE *` variants and the compression modes are not ported |
 | Lua | :heavy_check_mark: | :heavy_check_mark: | :x: | |
 | JS (QuickJS) | :heavy_check_mark: | :heavy_check_mark: | :x: | |
 | Platform bridges (JNI / ArkTS / …) | | | | Not started |
@@ -55,13 +54,10 @@ cargo clippy --all-targets -- -D warnings   # lint gate
 
 `Cargo.lock` is committed and CI builds with `--locked`.
 
-On Apple Silicon the `.cargo/config.toml` entry for `aarch64-apple-darwin` adds
-`-C link-arg=-static` (the flags used when packaging the static lib), which breaks linking a normal
-host binary. Clear them the way CI does:
-
-```bash
-cargo test --config 'target.aarch64-apple-darwin.rustflags=[]'
-```
+Note: `aarch64-apple-darwin` must not carry `-C link-arg=-static`: macOS cannot link executables
+statically (`ld: library 'crt0.o' not found`), while build scripts, proc macros, the cdylib and
+`qjsc` all link. A `staticlib` needs no linker flags. Clearing it afterwards with `cargo --config`
+does not work either, because cargo joins array values instead of replacing them.
 
 ## :test_tube: Tests
 
@@ -80,8 +76,8 @@ cargo test --config 'target.aarch64-apple-darwin.rustflags=[]'
 
 ## :rocket: CI
 
-Every host has its own workflow file, so the badges above and the checks list report the result per
-platform and a failure on one never cancels or hides another:
+Only the host workflows are badged above; `Common.yml` reports through the checks list. Because
+every host is its own workflow, a failure on one never cancels or hides another:
 
 | Workflow | Contents |
 | :-- | :-- |

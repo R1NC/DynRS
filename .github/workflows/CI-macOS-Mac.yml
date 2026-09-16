@@ -65,11 +65,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-cargo-
 
-      # `macos-latest` is arm64, and `.cargo/config.toml` gives that triple the flags used for
-      # packaging the static lib (`-C link-arg=-static`), which break linking an ordinary host
-      # binary. They are cleared for this workflow only; packaging keeps using them.
       - name: Build
-        run: cargo build --verbose --locked --config 'target.aarch64-apple-darwin.rustflags=[]'
+        run: cargo build --verbose --locked
 
       - name: Test
-        run: cargo test --verbose --locked --config 'target.aarch64-apple-darwin.rustflags=[]'
+        run: cargo test --verbose --locked
