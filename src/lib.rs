@@ -5,6 +5,7 @@ pub mod core {
     pub mod lua;
     pub mod net;
     pub mod qjs;
+    pub mod timer;
     pub mod zip;
 }
 

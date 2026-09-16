@@ -4,9 +4,13 @@ use crate::c::util::{
 use crate::core::qjs::JSBridge;
 use libc::{c_char, c_void};
 
+/// Creates a QuickJS bridge, or returns null if the engine could not be started.
 #[unsafe(no_mangle)]
 pub extern "C" fn ngenrs_qjs_init() -> *mut c_void {
-    box_into_raw_new(JSBridge::new()) as *mut c_void
+    match JSBridge::new() {
+        Ok(bridge) => box_into_raw_new(bridge) as *mut c_void,
+        Err(_) => std::ptr::null_mut(),
+    }
 }
 
 fn _ngenrs_qjs_load<T, F>(

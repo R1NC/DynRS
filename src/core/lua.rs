@@ -1,98 +1,74 @@
-use mlua::{FromLua, Function, Lua, UserData};
-use std::collections::HashMap;
+use crate::core::timer::{Timers, lock_timers};
+use mlua::{FromLuaMulti, Function, Lua, UserData};
 use std::path::Path;
 use std::result::Result;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
+/// The handle `addTimer` hands back to a script.
 #[derive(Clone)]
-struct TimerHandle(usize);
-
-struct TimerEntry {
-    end_time: Instant,
-    callback: String, // Store function name instead of Function
-}
+struct TimerHandle(i32);
 
 impl UserData for TimerHandle {}
 
-struct TimerState {
-    next_id: usize,
-    active_timers: HashMap<usize, TimerEntry>,
-}
-
 pub struct LuaBridge {
     lua: Lua,
-    timers: Arc<Mutex<TimerState>>,
+    timers: Arc<Mutex<Timers>>,
 }
 
 impl LuaBridge {
     pub fn new() -> Result<Self, String> {
-        let lua = Lua::new();
-        let timers = Arc::new(Mutex::new(TimerState {
-            next_id: 1,
-            active_timers: HashMap::new(),
-        }));
-
-        let bridge = LuaBridge { lua, timers };
+        let bridge = LuaBridge {
+            lua: Lua::new(),
+            timers: Arc::new(Mutex::new(Timers::new())),
+        };
         bridge.init_timer_api()?;
         Ok(bridge)
     }
 
+    /// Registers the timer functions the JS bridge exposes as well, so a script behaves the same in
+    /// either runtime.
     fn init_timer_api(&self) -> Result<(), String> {
-        let timers_add = self.timers.clone();
+        let timers_add = Arc::clone(&self.timers);
+        self.export_function("addTimer", move |lua, args: mlua::MultiValue| {
+            let (delay, callback) = <(f64, String)>::from_lua_multi(args, lua)?;
 
-        self.export_function("addTimer", move |lua, value: mlua::Value| {
-            let table = mlua::Table::from_lua(value, lua)?;
-            let delay: f64 = table.get(1)?;
-            let callback_name: String = table.get(2)?;
-
-            let handle = {
-                let mut state = timers_add.lock().unwrap();
-                let id = state.next_id;
-                state.next_id += 1;
-                state.active_timers.insert(
-                    id,
-                    TimerEntry {
-                        end_time: Instant::now() + Duration::from_secs_f64(delay),
-                        callback: callback_name, // Store function name
-                    },
-                );
-                TimerHandle(id)
-            };
-            Ok(handle)
+            let handle = lock_timers(&timers_add)
+                .map_err(mlua::Error::RuntimeError)?
+                .add(delay, &callback);
+            Ok(TimerHandle(handle))
         })
         .map_err(|e| e.to_string())?;
 
-        let timers_poll = self.timers.clone();
-        self.export_function("pollTimers", move |lua, _: mlua::Value| {
-            let mut state = timers_poll.lock().unwrap();
-            let now = Instant::now();
-            let mut expired = Vec::new();
-
-            state.active_timers.retain(|id, entry| {
-                if entry.end_time <= now {
-                    expired.push((*id, entry.callback.clone()));
-                    false
-                } else {
-                    true
-                }
-            });
-
-            // Look up and call functions by name
-            for (_, func_name) in expired {
-                let func: Function = lua.globals().get(&*func_name)?; // Added dereference here
+        let timers_poll = Arc::clone(&self.timers);
+        self.export_function("pollTimers", move |lua, _args: mlua::MultiValue| {
+            // The lock is released before the callbacks run, so one of them may schedule another
+            // timer or remove one.
+            let due = lock_timers(&timers_poll)
+                .map_err(mlua::Error::RuntimeError)?
+                .poll();
+            for func_name in due {
+                let func: mlua::Value = lua.globals().get(&*func_name)?;
+                let func = match func {
+                    mlua::Value::Function(func) => func,
+                    _ => {
+                        return Err(mlua::Error::RuntimeError(format!(
+                            "the timer callback {func_name} is not defined"
+                        )));
+                    }
+                };
                 func.call::<_, ()>(())?;
             }
             Ok(())
         })
         .map_err(|e| e.to_string())?;
 
-        let timers_remove = self.timers.clone();
-        self.export_function("removeTimer", move |lua, value: mlua::Value| {
-            let ud = mlua::AnyUserData::from_lua(value, lua)?;
-            let handle = ud.borrow::<TimerHandle>()?.clone();
-            let mut state = timers_remove.lock().unwrap();
-            state.active_timers.remove(&handle.0);
+        let timers_remove = Arc::clone(&self.timers);
+        self.export_function("removeTimer", move |lua, args: mlua::MultiValue| {
+            let (userdata,) = <(mlua::AnyUserData,)>::from_lua_multi(args, lua)?;
+            let handle = userdata.borrow::<TimerHandle>()?.clone();
+            lock_timers(&timers_remove)
+                .map_err(mlua::Error::RuntimeError)?
+                .remove(handle.0);
             Ok(())
         })
         .map_err(|e| e.to_string())?;
@@ -118,9 +94,11 @@ impl LuaBridge {
         func.call::<_, String>(arg).map_err(|e| e.to_string())
     }
 
-    pub fn export_function<'a, F, R>(&self, name: &str, func: F) -> Result<(), String>
+    /// Registers a Rust function as a global the script can call. The closure receives all of the
+    /// script's arguments.
+    pub fn export_function<F, R>(&self, name: &str, func: F) -> Result<(), String>
     where
-        F: Fn(&Lua, mlua::Value) -> mlua::Result<R> + 'static,
+        F: Fn(&Lua, mlua::MultiValue) -> mlua::Result<R> + 'static,
         R: for<'lua> mlua::IntoLuaMulti<'lua>,
     {
         let lua_func = self.lua.create_function(func).map_err(|e| e.to_string())?;
@@ -145,5 +123,90 @@ impl LuaBridge {
             .globals()
             .set(name, lua_func)
             .map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `call_function` expects the script function to return a string, so the timers are polled
+    /// through these wrappers.
+    const TIMERS: &str = r#"
+        local fired = 0
+
+        function on_fire()
+            fired = fired + 1
+            if fired == 1 then
+                -- A callback is allowed to schedule another timer while polling.
+                addTimer(0, "on_fire")
+            end
+        end
+
+        local timer = addTimer(0, "on_fire")
+
+        function count() return tostring(fired) end
+        function poll() pollTimers() return tostring(fired) end
+        function cancel() removeTimer(timer) return "ok" end
+    "#;
+
+    #[test]
+    fn a_timer_runs_once_and_a_callback_can_schedule_another() {
+        let bridge = LuaBridge::new().unwrap();
+        bridge.load_string(TIMERS).unwrap();
+
+        // Registering a timer does not run it.
+        assert_eq!(bridge.call_function("count", "").unwrap(), "0");
+        assert_eq!(bridge.call_function("poll", "").unwrap(), "1");
+
+        // The timer the callback scheduled above now runs.
+        assert_eq!(bridge.call_function("poll", "").unwrap(), "2");
+
+        // Nothing is left to run, and cancelling a timer that already ran is harmless.
+        assert_eq!(bridge.call_function("poll", "").unwrap(), "2");
+        assert_eq!(bridge.call_function("cancel", "").unwrap(), "ok");
+        assert_eq!(bridge.call_function("poll", "").unwrap(), "2");
+    }
+
+    #[test]
+    fn a_removed_timer_never_runs() {
+        let bridge = LuaBridge::new().unwrap();
+        bridge
+            .load_string(
+                r#"
+                local fired = 0
+
+                function on_fire() fired = fired + 1 end
+
+                local dropped = addTimer(0, "on_fire")
+
+                function drop() removeTimer(dropped) return "ok" end
+                function poll() pollTimers() return tostring(fired) end
+                "#,
+            )
+            .unwrap();
+
+        assert_eq!(bridge.call_function("drop", "").unwrap(), "ok");
+        assert_eq!(bridge.call_function("poll", "").unwrap(), "0");
+    }
+
+    #[test]
+    fn a_missing_callback_is_reported() {
+        let bridge = LuaBridge::new().unwrap();
+        bridge
+            .load_string(
+                r#"
+                addTimer(0, "not_a_function")
+
+                function poll() pollTimers() return "ok" end
+                "#,
+            )
+            .unwrap();
+
+        let error = bridge.call_function("poll", "").unwrap_err();
+        assert!(
+            error.contains("not_a_function"),
+            "unexpected error: {error}"
+        );
     }
 }

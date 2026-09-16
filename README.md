@@ -10,11 +10,30 @@ A cross-platform framework based on Rust, supporting biz dev via Lua & JS.
 
 ## :classical_building: Architecture
 
-| Path | Contents |
-| :-- | :-- |
-| `src/core/*` | The portable logic: `crypto`, `db` (SQLite), `kv` (redb), `net`, `zip`, `lua`, `qjs`. |
-| `src/c/*` | The hand-written C ABI (`ngenrs_*` symbols) that the platform bridges (JNI / ArkTS / …) call. |
-| `src/bin/qjsc.rs` | QuickJS bytecode compiler. |
+```mermaid
+flowchart TD
+    host["Host app (Android · iOS · OHOS · desktop)"]
+    bridge["JNI / ArkTS bridges — not started"]
+    cabi["src/c — C ABI"]
+    core["src/core — crypto · db · kv · net · zip"]
+    lua["lua — LuaBridge"]
+    qjs["qjs — JSBridge"]
+    scripts["Lua / JS scripts"]
+    qjsc["qjsc — bytecode compiler"]
+    crates["mlua · libquickjs-ng-sys · rusqlite · redb · reqwest + native-tls + tokio · flate2 · rsa · aes-gcm · sha2 · base64"]
+
+    host --> bridge --> cabi
+    cabi --> core
+    cabi --> lua
+    cabi --> qjs
+    lua --> scripts
+    qjs --> scripts
+    scripts -.->|engine APIs — not exposed yet| core
+    qjsc -->|.qbc| qjs
+    core --> crates
+    lua --> crates
+    qjs --> crates
+```
 
 The crate builds as a `staticlib` plus a `cdylib`, so one code base serves every host.
 
@@ -27,8 +46,8 @@ The crate builds as a `staticlib` plus a `cdylib`, so one code base serves every
 | SQLite | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | |
 | Key-Value | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | one store key can hold one value per type, where DynXX's MMKV keeps a single typed value per key; DynXX's 256 byte key limit is not enforced |
 | Zip | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | one-shot `compress` / `decompress` only; DynXX's streaming `zip_init` / `input` / `process_do` API, its `FILE *` variants and the compression modes are not ported |
-| Lua | :heavy_check_mark: | :heavy_check_mark: | :x: | |
-| JS (QuickJS) | :heavy_check_mark: | :heavy_check_mark: | :x: | |
+| Lua | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | `addTimer` / `pollTimers` / `removeTimer` are a DynRS addition, DynXX has no timer API |
+| JS (QuickJS) | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | same three timer functions as the Lua bridge |
 | Platform bridges (JNI / ArkTS / …) | | | | Not started |
 
 * :heavy_check_mark: : Done;
@@ -53,6 +72,7 @@ cargo clippy --all-targets -- -D warnings
 
 * `src/core/*` — behaviour of the portable layer, mirroring DynXX's gtest coverage.
 * `src/c/*` — ABI contract tests only: null arguments, empty results, ownership.
+* Timers run on the host thread: `addTimer` schedules, `pollTimers` runs what is due, `removeTimer` drops one. A callback may schedule another timer.
 * JNI / ArkTS bridges are not covered, the same as DynXX.
 
 ### Memory ownership at the C ABI
