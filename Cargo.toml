@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 
+[workspace]
+# The cross builds live in `xtask` (`cargo xtask build --target ohos`). It stays out of the default
+# members, so that a plain `cargo build` is still what it was: the library and the `qjsc` tool.
+members = ["xtask"]
+default-members = ["."]
+
 [lib]
 name = "dynrs"
 # The C ABI is shipped as a static library. The wasm workflow asks for a cdylib on the command

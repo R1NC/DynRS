@@ -7,12 +7,16 @@ on:
       - 'src/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - '.cargo/**'
+      - 'xtask/**'
       - '.github/workflows/CI-Android-Ubuntu.yml'
   pull_request:
     paths:
       - 'src/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - '.cargo/**'
+      - 'xtask/**'
       - '.github/workflows/CI-Android-Ubuntu.yml'
   workflow_dispatch:
 
@@ -51,33 +55,6 @@ jobs:
             echo "::warning::libclang.so not found, bindgen falls back to its own search"
           fi
 
-      # The runner image ships the Android SDK with at least one NDK, and the NDK is what compiles
-      # the vendored C for the ABI. bindgen does not pass a target to libclang on its own, so it
-      # gets both the target and the sysroot of the NDK to find the C headers of Android instead of
-      # the ones of the host.
-      - name: Detect the Android NDK
-        shell: bash
-        run: |
-          set -euo pipefail
-          ndk="${ANDROID_NDK_LATEST_HOME:-}"
-          if [ ! -d "${ndk}" ]; then
-            ndk="$(ls -d "${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"/ndk/* 2>/dev/null | sort -V | tail -n1 || true)"
-          fi
-          if [ ! -d "${ndk}" ]; then
-            echo "::error::no Android NDK was found on this runner"
-            exit 1
-          fi
-          sysroot="${ndk}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-          {
-            echo "ANDROID_NDK_HOME=${ndk}"
-            # `libquickjs-ng-sys` compiles with plain clang whatever `CC` says, so that one also
-            # needs the target and the sysroot on the command line.
-            echo "CFLAGS_aarch64_linux_android=--target=aarch64-linux-android24 --sysroot=${sysroot}"
-            echo "BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android=--target=aarch64-linux-android24 --sysroot=${sysroot}"
-          } >> "${GITHUB_ENV}"
-          echo "ANDROID_NDK_HOME=${ndk}"
-          echo "sysroot=${sysroot}"
-
       - name: Cache cargo registry and target
         uses: actions/cache@v4
         with:
@@ -90,30 +67,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-android-arm64-v8a-cargo-
 
-      # The vendored C (SQLite, Lua, QuickJS, zlib) is compiled with the NDK toolchain, whose
-      # `llvm-ar` also archives the result, and OpenSSL is built from source for the same toolchain
-      # because `native-tls` needs it and the NDK does not ship it.
-      - name: Build the static library
-        shell: bash
-        env:
-          TARGET: aarch64-linux-android
-        run: |
-          set -euo pipefail
-          ndk="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64"
-          export PATH="${ndk}/bin:${PATH}"
-          export ANDROID_NDK_ROOT="${ANDROID_NDK_HOME}"
-          underscore="${TARGET//-/_}"
-          export "CC_${underscore}=${ndk}/bin/aarch64-linux-android24-clang"
-          export "AR_${underscore}=${ndk}/bin/llvm-ar"
-          # OpenSSL's build indexes its archives with ranlib, which the NDK calls `llvm-ranlib`.
-          export "RANLIB_${underscore}=${ndk}/bin/llvm-ranlib"
-          # `.cargo/config.toml` points this target at a local NDK as well (its `${env.…}` is not
-          # expanded and the path is the macOS one), so all three settings are overridden through
-          # the environment, which takes precedence over the config file.
-          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${ndk}/bin/aarch64-linux-android24-clang"
-          export CARGO_TARGET_AARCH64_LINUX_ANDROID_AR="${ndk}/bin/llvm-ar"
-          export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS=""
-          cargo build --release --lib --locked --target "${TARGET}"
+      # The NDK - whichever one the runner image ships - and the compiler settings the vendored C
+      # and OpenSSL need are found by the build helper; see `xtask/src/android.rs`.
+      - name: Build
+        run: cargo xtask build --target android --release
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

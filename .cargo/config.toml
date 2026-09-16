@@ -1,12 +1,8 @@
-[target.aarch64-linux-android]
-ar = "${env.ANDROID_NDK_ROOT}/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ar"
-linker = "${env.ANDROID_NDK_ROOT}/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android21-clang"
-rustflags = ["-C", "link-arg=-shared"]
-
-[target.aarch64-unknown-linux-ohos]
-ar = "${env.HARMONYOS_NDK_ROOT}/llvm/bin/llvm-ar"
-linker = "${env.HARMONYOS_NDK_ROOT}/llvm/bin/aarch64-unknown-linux-ohos-clang"
-rustflags = ["-C", "link-arg=-shared"]
+# The cross builds are driven by `cargo xtask build --target <wasm|android|ohos>`: it looks for the
+# SDK of the target and exports what cannot be expressed here (`${env.…}` is not expanded in this
+# file, and the vendored C reads `CC`/`CFLAGS`/`CXXFLAGS` from the environment).
+[alias]
+xtask = "run --package xtask --"
 
 [target.aarch64-apple-ios]
 linker = "xcrun -sdk iphoneos clang"

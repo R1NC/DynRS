@@ -7,12 +7,16 @@ on:
       - 'src/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - '.cargo/**'
+      - 'xtask/**'
       - '.github/workflows/CI-OHOS-Ubuntu.yml'
   pull_request:
     paths:
       - 'src/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - '.cargo/**'
+      - 'xtask/**'
       - '.github/workflows/CI-OHOS-Ubuntu.yml'
   workflow_dispatch:
 
@@ -21,8 +25,7 @@ env:
   OHOS_SDK_VERSION: 26.0.0.38
 
 # OpenHarmony, arm64-v8a, static library only, on one Ubuntu host. DynXX's OHOS build ships the
-# same single ABI, and its tests cannot run for the target either. The network module links the
-# OpenSSL that comes with the SDK.
+# same single ABI, and its tests cannot run for the target either.
 #
 # The SDK is the public HarmonyOS one, from the same mirror DynXX uses, and it is cached so only
 # the first run pays for the download.
@@ -77,61 +80,6 @@ jobs:
           cd ohos-sdk/linux
           unzip -q "native-linux-x64-${OHOS_SDK_VERSION}-Release.zip"
 
-      # The vendored C and the vendored OpenSSL are compiled with the OHOS clang against the sysroot
-      # of the SDK, so the toolchain is located here instead of being hard coded: the SDK packages
-      # do not always unpack into the same directory names, and their `clang` is a symlink. The
-      # layout is printed so that a wrong assumption is visible in the log.
-      - name: Locate the HarmonyOS toolchain
-        shell: bash
-        run: |
-          set -euo pipefail
-          sdk_root="${GITHUB_WORKSPACE}/ohos-sdk/linux"
-          echo "--- SDK layout ---"
-          find "${sdk_root}" -maxdepth 3 -type d | sort | head -n 40
-
-          llvm_ar="$(find "${sdk_root}" -name 'llvm-ar' -print -quit || true)"
-          if [ -z "${llvm_ar}" ]; then
-            echo "::error::the HarmonyOS toolchain was not found in this SDK"
-            exit 1
-          fi
-          toolchain="$(dirname "${llvm_ar}")"
-
-          clang="${toolchain}/clang"
-          if [ ! -e "${clang}" ] && [ ! -L "${clang}" ]; then
-            clang="$(find "${toolchain}" -maxdepth 1 -name 'clang-*' -print -quit || true)"
-          fi
-          if [ -z "${clang}" ] || { [ ! -e "${clang}" ] && [ ! -L "${clang}" ]; }; then
-            echo "::error::no clang was found in ${toolchain}"
-            exit 1
-          fi
-
-          # The sysroot sits next to the toolchain's parent (`<sdk>/native/llvm/bin` under
-          # `<sdk>/native/sysroot`), and it has also been called `sysroot_lite` in some packages,
-          # so the one that carries the C headers wins.
-          native_root="$(dirname "$(dirname "${toolchain}")")"
-          sysroot=""
-          for candidate in "${native_root}/sysroot" "${native_root}/sysroot_lite"; do
-            if [ -f "${candidate}/usr/include/stdio.h" ]; then
-              sysroot="${candidate}"
-              break
-            fi
-          done
-          if [ -z "${sysroot}" ]; then
-            sysroot="$(find "${sdk_root}" -maxdepth 6 -type d -name 'sysroot*' -print -quit || true)"
-          fi
-          if [ -z "${sysroot}" ]; then
-            echo "::error::no sysroot was found in this SDK"
-            exit 1
-          fi
-          echo "clang:   ${clang}"
-          echo "llvm-ar: ${llvm_ar}"
-          echo "sysroot: ${sysroot}"
-
-          {
-            echo "OHOS_TOOLCHAIN=${toolchain}"
-            echo "OHOS_SYSROOT=${sysroot}"
-          } >> "${GITHUB_ENV}"
-
       - name: Cache cargo registry and target
         uses: actions/cache@v4
         with:
@@ -144,32 +92,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-ohos-cargo-
 
-      # The OHOS clang compiles the vendored C (SQLite, Lua, QuickJS, zlib) and the vendored OpenSSL
-      # against the sysroot of the SDK, and its llvm-ar is what archives the result. The manifest
-      # declares a static library, so nothing gets linked against the OHOS libraries here.
-      - name: Build the static library
-        shell: bash
-        run: |
-          set -euo pipefail
-          export PATH="${OHOS_TOOLCHAIN}:${PATH}"
-          export CC_aarch64_unknown_linux_ohos="${OHOS_TOOLCHAIN}/clang"
-          export AR_aarch64_unknown_linux_ohos="${OHOS_TOOLCHAIN}/llvm-ar"
-          # OpenSSL's build indexes its archives with ranlib, which the LLVM toolchain calls
-          # `llvm-ranlib`.
-          ranlib="${OHOS_TOOLCHAIN}/llvm-ranlib"
-          [ -e "${ranlib}" ] || ranlib="${OHOS_TOOLCHAIN}/ranlib"
-          export RANLIB_aarch64_unknown_linux_ohos="${ranlib}"
-          export CFLAGS_aarch64_unknown_linux_ohos="--target=aarch64-linux-ohos --sysroot=${OHOS_SYSROOT}"
-          export BINDGEN_EXTRA_CLANG_ARGS_aarch64_unknown_linux_ohos="--target=aarch64-linux-ohos --sysroot=${OHOS_SYSROOT}"
-          # `.cargo/config.toml` has a section for this target too (its `${env.…}` is not expanded),
-          # so the environment - which takes precedence - is what supplies these. Unlike the NDK,
-          # this toolchain has no target-prefixed wrapper, so the clang that links has to be told
-          # the target and the sysroot itself; `redb` declares a `cdylib`, so its library is linked
-          # even though the manifest ships a static one.
-          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_LINKER="${OHOS_TOOLCHAIN}/clang"
-          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_AR="${OHOS_TOOLCHAIN}/llvm-ar"
-          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_RUSTFLAGS="-Clink-arg=--target=aarch64-linux-ohos -Clink-arg=--sysroot=${OHOS_SYSROOT}"
-          cargo build --release --lib --locked --target aarch64-unknown-linux-ohos
+      # The SDK layout has changed between releases, so the toolchain and the sysroot inside it are
+      # searched for rather than hard coded; see `xtask/src/ohos.rs`.
+      - name: Build
+        run: cargo xtask build --target ohos --release --sdk-root "${GITHUB_WORKSPACE}/ohos-sdk/linux"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

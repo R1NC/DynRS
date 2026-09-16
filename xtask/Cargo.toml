@@ -1,0 +1,9 @@
+# Build helper for the targets whose C toolchain comes from an SDK, driven by
+# `cargo xtask build --target <name>`; see `src/main.rs`. It has no dependencies of its own so
+# that it stays out of the way of `--locked`.
+[package]
+name = "xtask"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false

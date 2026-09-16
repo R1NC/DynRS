@@ -7,12 +7,16 @@ on:
       - 'src/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - '.cargo/**'
+      - 'xtask/**'
       - '.github/workflows/CI-WASM-Ubuntu.yml'
   pull_request:
     paths:
       - 'src/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - '.cargo/**'
+      - 'xtask/**'
       - '.github/workflows/CI-WASM-Ubuntu.yml'
   workflow_dispatch:
 
@@ -45,50 +49,6 @@ jobs:
         with:
           version: 6.0.9
 
-      # emcc decides which wasm-opt flags to pass, so both have to come from the same SDK. The
-      # versions are printed here so a mismatch is not a mystery in the log.
-      - name: Show the Emscripten versions
-        shell: bash
-        run: |
-          set -euo pipefail
-          emcc --version | head -n1
-          "${EMSDK}/upstream/bin/clang" --version | head -n1
-          if [ -x "${EMSDK}/upstream/bin/wasm-opt" ]; then
-            "${EMSDK}/upstream/bin/wasm-opt" --version
-          else
-            echo "this SDK has no wasm-opt"
-          fi
-
-      # `libquickjs-ng-sys` always compiles with plain clang (it ignores `CC`), and bindgen parses
-      # the QuickJS headers with libclang, so both have to be pointed at the C headers of the
-      # target instead of the host ones.
-      #
-      # The vendored C is also built as position independent code, because rustc links a `cdylib`
-      # for Emscripten as a side module and `wasm-ld` then refuses the relocations of those
-      # libraries. `lua-src` compiles Lua as C++ on Emscripten, so the flags are needed in both
-      # `CFLAGS` and `CXXFLAGS`.
-      - name: Point clang and bindgen at the Emscripten sysroot
-        shell: bash
-        run: |
-          set -euo pipefail
-          sysroot=""
-          for candidate in "${EMSDK}/upstream/emscripten/cache/sysroot" "${EMSDK}/upstream/emscripten/system"; do
-            if [ -f "${candidate}/include/stdio.h" ]; then
-              sysroot="${candidate}"
-              break
-            fi
-          done
-          if [ -z "${sysroot}" ]; then
-            echo "::error::no Emscripten sysroot was found"
-            exit 1
-          fi
-          {
-            echo "BINDGEN_EXTRA_CLANG_ARGS_wasm32_unknown_emscripten=--sysroot=${sysroot}"
-            echo "CFLAGS_wasm32_unknown_emscripten=--sysroot=${sysroot} -fPIC"
-            echo "CXXFLAGS_wasm32_unknown_emscripten=--sysroot=${sysroot} -fPIC"
-          } >> "${GITHUB_ENV}"
-          echo "sysroot=${sysroot}"
-
       - name: Detect libclang path
         shell: bash
         run: |
@@ -116,36 +76,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-wasm-cargo-
 
-      # The vendored C (SQLite, Lua, QuickJS, zlib) has to be compiled with the Emscripten wrappers
-      # instead of the host toolchain.
-      #
-      # A `.wasm` module is a cdylib, while the manifest ships a static library for every other
-      # target, so this run changes the manifest. Asking cargo for the crate type on the command
-      # line is not an option: `cargo rustc --crate-type` also applies it to the dependencies, and
-      # Emscripten then tries to link every one of them as its own side module.
+      # That the C is compiled by the clang of the SDK, that the sysroot of its headers reaches
+      # bindgen, and that a `.wasm` module is built as a `cdylib` are all handled by the build
+      # helper; see `xtask/src/wasm.rs`.
       - name: Build
-        shell: bash
-        env:
-          CC_wasm32_unknown_emscripten: emcc
-          AR_wasm32_unknown_emscripten: emar
-        run: |
-          set -euo pipefail
-          # `libquickjs-ng-sys` compiles its C with plain `clang` whatever `CC` says, so the clang of
-          # the SDK has to come first on the PATH: the `__INT64_C`/`__UINT64_C` macros that its
-          # sysroot leans on only became predefined macros in LLVM 20, and the image ships an older
-          # clang, which then cannot expand `UINT64_C`.
-          export PATH="${EMSDK}/upstream/bin:${PATH}"
-          case "$(command -v clang)" in
-            "${EMSDK}/"*) ;;
-            *)
-              echo "::error::clang does not come from the Emscripten SDK: $(command -v clang)"
-              exit 1
-              ;;
-          esac
-          clang --version | head -n1
-          sed -i 's/crate-type = \["staticlib"\]/crate-type = ["cdylib"]/' Cargo.toml
-          grep -n 'crate-type' Cargo.toml
-          cargo build --release --lib --locked --target wasm32-unknown-emscripten
+        run: cargo xtask build --target wasm --release
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

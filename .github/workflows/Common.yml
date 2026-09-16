@@ -9,6 +9,8 @@ on:
       - 'Cargo.lock'
       - 'rustfmt.toml'
       - 'deny.toml'
+      - '.cargo/**'
+      - 'xtask/**'
       - '.github/workflows/Common.yml'
   pull_request:
     paths:
@@ -17,6 +19,8 @@ on:
       - 'Cargo.lock'
       - 'rustfmt.toml'
       - 'deny.toml'
+      - '.cargo/**'
+      - 'xtask/**'
       - '.github/workflows/Common.yml'
   workflow_dispatch:
 
@@ -84,7 +88,7 @@ jobs:
             ${{ runner.os }}-${{ runner.arch }}-cargo-
 
       - name: Lint
-        run: cargo clippy --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   deny:
     name: deny
