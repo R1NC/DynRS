@@ -34,7 +34,7 @@ A cross-platform framework based on Rust, supporting biz dev via Lua & JS.
 
 ## :hammer_and_wrench: Build
 
-* Rust with edition 2024 support (1.85+).
+* Rust 1.89+ (edition 2024). The floor is set by the dependency graph, not by the edition.
 * `libclang` for `bindgen` (via `libquickjs-ng-sys`); set `LIBCLANG_PATH` when it is not on `PATH`.
 * A C toolchain for the vendored QuickJS, Lua and SQLite.
 
@@ -42,7 +42,8 @@ A cross-platform framework based on Rust, supporting biz dev via Lua & JS.
 cargo build                                 # the static library, plus the qjsc tool
 cargo test
 cargo fmt --all --check
-cargo clippy --all-targets -- -D warnings
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo xtask build --target wasm --release   # also: android, ohos, ios (each needs its SDK)
 ```
 
 ## :test_tube: Tests
