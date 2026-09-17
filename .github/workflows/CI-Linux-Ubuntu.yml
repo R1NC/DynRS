@@ -119,6 +119,12 @@ jobs:
             test-report.html
           if-no-files-found: error
 
+      # The API reference of the crate: the `ngenrs_*` C ABI, the Lua bridge and the JS bridge all
+      # carry rustdoc comments, so one `cargo doc` covers them.
+      - name: Generate API docs
+        if: github.ref == 'refs/heads/main'
+        run: cargo doc --locked --no-deps
+
       - name: Setup Pages
         if: github.ref == 'refs/heads/main'
         uses: actions/configure-pages@v6
@@ -130,11 +136,14 @@ jobs:
           set -euo pipefail
           site="${RUNNER_TEMP}/pages-site"
           rm -rf "${site}"
-          mkdir -p "${site}/coverage" "${site}/tests"
+          mkdir -p "${site}/coverage" "${site}/tests" "${site}/docs"
           cp .github/pages/index.html "${site}/index.html"
           # `--output-dir coverage` puts the pages of the HTML report in `coverage/html`.
           cp -a coverage/html/. "${site}/coverage/"
           cp test-report.html "${site}/tests/index.html"
+          # rustdoc writes the shared assets (`src/`, `static.files/`, the search index) next to the
+          # crate directory, so the whole output goes into `docs/`.
+          cp -a target/doc/. "${site}/docs/"
 
       - name: Upload Pages artifact
         if: github.ref == 'refs/heads/main'

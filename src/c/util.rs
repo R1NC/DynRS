@@ -41,7 +41,7 @@ pub fn cbytes_to_rust(data: *const u8, len: usize) -> Option<&'static [u8]> {
     }
 }
 
-/// Converts Rust Vec<u8> to C-owned bytes (transfers ownership)
+/// Converts Rust `Vec<u8>` to C-owned bytes (transfers ownership)
 pub fn rust_to_cbytes(data: Vec<u8>) -> (*mut u8, usize) {
     let boxed = data.into_boxed_slice();
     let len = boxed.len();
