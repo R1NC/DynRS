@@ -84,16 +84,10 @@ jobs:
       - name: Build
         run: cargo build --verbose --locked
 
-      # `cargo llvm-cov` is the Rust side of the same LLVM coverage that the C++ DynXX uses: it
-      # runs the tests, writes the coverage HTML to `coverage/`, and the log that `xtask
-      # test-report` renders as the unit test report.
+      # `cargo llvm-cov` is the Rust side of the same LLVM coverage that the C++ DynXX uses. The
+      # helper runs it and renders the unit test report, and holds the coverage to a floor.
       - name: Test
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo llvm-cov --locked --html --output-dir coverage 2>&1 | tee test-output.txt
-          cargo llvm-cov report --lcov --output-path coverage/lcov.info
-          cargo xtask test-report --input test-output.txt --output test-report.html
+        run: cargo xtask report --fail-under-lines 80
 
       # What people download from a run: the release static library and the qjsc compiler.
       - name: Build release artifacts
@@ -131,19 +125,7 @@ jobs:
 
       - name: Prepare Pages site
         if: github.ref == 'refs/heads/main'
-        shell: bash
-        run: |
-          set -euo pipefail
-          site="${RUNNER_TEMP}/pages-site"
-          rm -rf "${site}"
-          mkdir -p "${site}/coverage" "${site}/tests" "${site}/docs"
-          cp .github/pages/index.html "${site}/index.html"
-          # `--output-dir coverage` puts the pages of the HTML report in `coverage/html`.
-          cp -a coverage/html/. "${site}/coverage/"
-          cp test-report.html "${site}/tests/index.html"
-          # rustdoc writes the shared assets (`src/`, `static.files/`, the search index) next to the
-          # crate directory, so the whole output goes into `docs/`.
-          cp -a target/doc/. "${site}/docs/"
+        run: cargo xtask site --output "${RUNNER_TEMP}/pages-site"
 
       - name: Upload Pages artifact
         if: github.ref == 'refs/heads/main'

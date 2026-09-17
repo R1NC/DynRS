@@ -1,18 +1,19 @@
 use crate::c::util::{
-    box_into_raw_new, cstr_to_rust, rust_map_from_c_arrays, rust_map_to_c_arrays, rust_to_cstr,
+    box_into_raw_new, cstr_to_rust, ngenrs_free_ptr, rust_map_from_c_arrays, rust_map_to_c_arrays,
+    rust_to_cstr,
 };
 use crate::core::net::{
     DnsConfig, HttpClient, HttpResponse, set_cert_path, set_dns_configs, set_proxy,
 };
-use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::os::raw::{c_char, c_void};
 use std::path::Path;
 use std::slice;
+use std::sync::LazyLock;
 use tokio::runtime::Runtime;
 
-static RUNTIME: Lazy<Runtime> =
-    Lazy::new(|| Runtime::new().expect("Failed to create Tokio runtime"));
+static RUNTIME: LazyLock<Runtime> =
+    LazyLock::new(|| Runtime::new().expect("Failed to create Tokio runtime"));
 
 #[unsafe(no_mangle)]
 pub extern "C" fn ngenrs_http_client_init(ca_cert_path: *const c_char) -> *mut c_void {
@@ -286,17 +287,317 @@ pub extern "C" fn ngenrs_http_parse_rsp_body(rsp_ptr: *mut c_void) -> *mut c_cha
     }
 }
 
+/// Releases a response of `ngenrs_http_get`, `ngenrs_http_post`, `ngenrs_http_download` or
+/// `ngenrs_http_upload`. The `parse_rsp_*` readers only look at the response, so the caller has to
+/// hand it back once it is done with it.
+#[unsafe(no_mangle)]
+pub extern "C" fn ngenrs_http_release_rsp(rsp_ptr: *mut c_void) {
+    ngenrs_free_ptr(rsp_ptr as *mut HttpResponse);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::c::util::ngenrs_free_cstr;
     use crate::core::net::{CONFIG_TEST_LOCK, config_snapshot};
-    use std::ffi::CString;
+    use crate::core::net_test_server::{Server, behind_an_environment_proxy, ok};
+    use std::ffi::{CStr, CString};
     use std::sync::MutexGuard;
 
     fn lock_config() -> MutexGuard<'static, ()> {
         CONFIG_TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// A client over a clean global config, with the lock that keeps it stable, or `None` when a
+    /// proxy in the environment would keep the requests away from this machine anyway.
+    fn client_and_clean_config() -> Option<(*mut c_void, MutexGuard<'static, ()>)> {
+        if behind_an_environment_proxy() {
+            return None;
+        }
+
+        let guard = lock_config();
+        // A clean config, through the entry points a C caller would use as well.
+        ngenrs_net_http_set_cert_path(std::ptr::null());
+        ngenrs_net_http_set_proxy(std::ptr::null());
+        ngenrs_net_http_set_dns_configs(std::ptr::null(), 0);
+
+        let client = ngenrs_http_client_init(std::ptr::null());
+        assert!(!client.is_null(), "the client is created");
+        Some((client, guard))
+    }
+
+    /// The whole path a C caller takes: configure, request, read the response, release it.
+    #[test]
+    fn a_request_round_trips_through_the_c_abi() {
+        let Some((client, _guard)) = client_and_clean_config() else {
+            return;
+        };
+
+        let server = Server::start(ok("hello"));
+        let url = CString::new(server.url("/c")).unwrap();
+        let key = CString::new("x-request").unwrap();
+        let value = CString::new("1").unwrap();
+        let body = CString::new("payload").unwrap();
+        let keys = [key.as_ptr()];
+        let values = [value.as_ptr()];
+
+        let response = ngenrs_http_get(
+            client,
+            url.as_ptr(),
+            keys.as_ptr(),
+            values.as_ptr(),
+            keys.len(),
+            body.as_ptr(),
+        );
+        assert!(!response.is_null(), "the request went through");
+        assert_eq!(ngenrs_http_parse_rsp_status(response), 200);
+
+        let parsed = ngenrs_http_parse_rsp_body(response);
+        assert_eq!(unsafe { CStr::from_ptr(parsed) }.to_str().unwrap(), "hello");
+        ngenrs_free_cstr(parsed);
+
+        // The headers are handed out as strings, one `ngenrs_free_cstr` each.
+        let mut header_keys = [std::ptr::null_mut(); 8];
+        let mut header_values = [std::ptr::null_mut(); 8];
+        let mut header_count = 0;
+        ngenrs_http_parse_rsp_headers(
+            response,
+            header_keys.as_mut_ptr(),
+            header_values.as_mut_ptr(),
+            &mut header_count,
+        );
+        assert!(header_count > 0, "the response has headers");
+        let mut reply = None;
+        for index in 0..header_count {
+            let name = unsafe { CStr::from_ptr(header_keys[index]) }
+                .to_str()
+                .unwrap()
+                .to_string();
+            let header = unsafe { CStr::from_ptr(header_values[index]) }
+                .to_str()
+                .unwrap()
+                .to_string();
+            if name.eq_ignore_ascii_case("x-reply") {
+                reply = Some(header);
+            }
+            ngenrs_free_cstr(header_keys[index]);
+            ngenrs_free_cstr(header_values[index]);
+        }
+        assert_eq!(reply.as_deref(), Some("yes"));
+
+        let request = server.request(0).to_ascii_lowercase();
+        assert!(request.contains("x-request: 1"), "{request}");
+        assert!(request.ends_with("payload"), "{request}");
+
+        // A null pointer is accepted by every reader, and by the release.
+        assert_eq!(ngenrs_http_parse_rsp_status(std::ptr::null_mut()), -1);
+        assert!(ngenrs_http_parse_rsp_body(std::ptr::null_mut()).is_null());
+        ngenrs_http_parse_rsp_headers(
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+        ngenrs_http_release_rsp(std::ptr::null_mut());
+
+        ngenrs_http_release_rsp(response);
+        ngenrs_http_client_release(client);
+    }
+
+    /// The JSON arguments become the request body; a value that is not JSON is dropped.
+    #[test]
+    fn post_sends_json_params_through_the_c_abi() {
+        let Some((client, _guard)) = client_and_clean_config() else {
+            return;
+        };
+        let server = Server::start(ok("taken"));
+
+        let url = CString::new(server.url("/json")).unwrap();
+        let key = CString::new("a").unwrap();
+        let value = CString::new("1").unwrap();
+        let broken = CString::new("not json").unwrap();
+        let json_keys = [key.as_ptr(), broken.as_ptr()];
+        let json_values = [value.as_ptr(), broken.as_ptr()];
+
+        let response = ngenrs_http_post(
+            client,
+            url.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+            json_keys.as_ptr(),
+            json_values.as_ptr(),
+            json_keys.len(),
+        );
+        assert!(!response.is_null(), "the request went through");
+        assert_eq!(ngenrs_http_parse_rsp_status(response), 200);
+
+        let request = server.request(0);
+        let lowered = request.to_ascii_lowercase();
+        assert!(
+            lowered.contains("content-type: application/json"),
+            "{request}"
+        );
+        assert!(request.contains("\"a\":1"), "{request}");
+        assert!(!lowered.contains("not json"), "{request}");
+
+        ngenrs_http_release_rsp(response);
+        ngenrs_http_client_release(client);
+    }
+
+    /// Without JSON arguments, the body is sent as it came in.
+    #[test]
+    fn post_sends_the_raw_body_through_the_c_abi() {
+        let Some((client, _guard)) = client_and_clean_config() else {
+            return;
+        };
+        let server = Server::start(ok("taken"));
+
+        let url = CString::new(server.url("/raw")).unwrap();
+        let body = CString::new("plain").unwrap();
+        let response = ngenrs_http_post(
+            client,
+            url.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            body.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+        );
+        assert!(!response.is_null(), "the request went through");
+
+        let request = server.request(0);
+        assert!(request.ends_with("plain"), "{request}");
+        assert!(
+            !request.to_ascii_lowercase().contains("application/json"),
+            "{request}"
+        );
+
+        ngenrs_http_release_rsp(response);
+        ngenrs_http_client_release(client);
+    }
+
+    /// A download puts the body in the file instead of in the response.
+    #[test]
+    fn download_writes_the_file_through_the_c_abi() {
+        let Some((client, _guard)) = client_and_clean_config() else {
+            return;
+        };
+        let server = Server::start(ok("hello"));
+
+        let url = CString::new(server.url("/file")).unwrap();
+        let path =
+            std::env::temp_dir().join(format!("dynrs_c_download_{}.txt", std::process::id()));
+        let output = CString::new(path.to_str().unwrap()).unwrap();
+
+        let response = ngenrs_http_download(
+            client,
+            url.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            output.as_ptr(),
+        );
+        assert!(!response.is_null(), "the request went through");
+        assert_eq!(ngenrs_http_parse_rsp_status(response), 200);
+        assert!(
+            ngenrs_http_parse_rsp_body(response).is_null(),
+            "the body of a download is the file, not a string in the response"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("the file was written"),
+            "hello"
+        );
+        std::fs::remove_file(&path).expect("the file is removed again");
+
+        assert!(server.request(0).starts_with("GET /file"));
+        ngenrs_http_release_rsp(response);
+        ngenrs_http_client_release(client);
+    }
+
+    /// Every part is sent with the mime type and file name it was given, and a part may leave both
+    /// out.
+    #[test]
+    fn upload_sends_parts_through_the_c_abi() {
+        let Some((client, _guard)) = client_and_clean_config() else {
+            return;
+        };
+        let server = Server::start(ok("stored"));
+
+        let url = CString::new(server.url("/up")).unwrap();
+        let first = CString::new("first").unwrap();
+        let second = CString::new("second").unwrap();
+        let mime = CString::new("text/plain").unwrap();
+        let filename = CString::new("a.txt").unwrap();
+        let data_first = b"one".to_vec();
+        let data_second = b"two".to_vec();
+
+        let names = [first.as_ptr(), second.as_ptr()];
+        let datas = [data_first.as_ptr(), data_second.as_ptr()];
+        let lengths = [data_first.len(), data_second.len()];
+        let mimes = [mime.as_ptr(), std::ptr::null()];
+        let filenames = [filename.as_ptr(), std::ptr::null()];
+
+        let response = ngenrs_http_upload(
+            client,
+            url.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            names.as_ptr(),
+            datas.as_ptr(),
+            lengths.as_ptr(),
+            mimes.as_ptr(),
+            filenames.as_ptr(),
+            names.len(),
+        );
+        assert!(!response.is_null(), "the request went through");
+        assert_eq!(ngenrs_http_parse_rsp_status(response), 200);
+
+        let request = server.request(0);
+        let lowered = request.to_ascii_lowercase();
+        assert!(
+            lowered.contains("content-type: multipart/form-data; boundary="),
+            "{request}"
+        );
+        assert!(request.contains("name=\"first\""), "{request}");
+        assert!(request.contains("name=\"second\""), "{request}");
+        assert!(lowered.contains("content-type: text/plain"), "{request}");
+        assert_eq!(request.matches("filename=").count(), 1, "{request}");
+
+        ngenrs_http_release_rsp(response);
+        ngenrs_http_client_release(client);
+    }
+
+    /// A request that cannot be made at all answers with a null response.
+    #[test]
+    fn a_request_that_fails_gives_a_null_response() {
+        let Some((client, _guard)) = client_and_clean_config() else {
+            return;
+        };
+        // A URL reqwest refuses to parse is the one failure that needs no server and cannot hang:
+        // the port of a listener that was just closed can be handed out again in the meantime.
+        let url = CString::new("not a url").unwrap();
+
+        let response = ngenrs_http_get(
+            client,
+            url.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+        );
+        assert!(
+            response.is_null(),
+            "the request failed, so there is no response"
+        );
+
+        ngenrs_http_client_release(client);
     }
 
     #[test]

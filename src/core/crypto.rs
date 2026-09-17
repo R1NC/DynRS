@@ -454,6 +454,58 @@ mod tests {
         assert_eq!(aes_decrypt(&out, &key), plain.to_vec());
     }
 
+    /// FIPS-197 appendix C: the sample plaintext under the sample key of each size DynXX accepts,
+    /// so that the 192 and 256 bit paths are checked against the standard and not only against
+    /// themselves.
+    #[test]
+    fn aes_ecb_supports_every_key_size() {
+        let plain = hex::decode("00112233445566778899aabbccddeeff").unwrap();
+        let vectors = [
+            (16, "69c4e0d86a7b0430d8cdb78070b4c55a"),
+            (24, "dda97ca4864cdfe06eaf70a0ec0d7191"),
+            (32, "8ea2b7ca516745bfeafc49904b496089"),
+        ];
+
+        for (key_len, expected) in vectors {
+            let key: Vec<u8> = (0..key_len as u8).collect();
+            let out = aes_encrypt(&plain, &key);
+            // PKCS7 adds a full block, so the first block is the vector and the second the padding.
+            assert_eq!(out.len(), 32, "a key of {key_len} bytes");
+            assert_eq!(
+                hex::encode(&out[..16]),
+                expected,
+                "a key of {key_len} bytes"
+            );
+            assert_eq!(aes_decrypt(&out, &key), plain, "a key of {key_len} bytes");
+        }
+    }
+
+    /// Inputs that the parameter checks refuse, which is where each of these ends in nothing.
+    #[test]
+    fn inputs_that_the_checks_refuse_yield_nothing() {
+        // AES-ECB: nothing to decrypt, and a key length that is not 16, 24 or 32.
+        assert!(aes_decrypt(&[], &[0u8; 16]).is_empty());
+        assert!(aes_decrypt(&[0u8; 16], &[0u8; 8]).is_empty());
+
+        // AES-GCM: an IV that is not 12 bytes, a tag size outside 96..=128, and a ciphertext that
+        // is shorter than the tag it is supposed to carry.
+        assert!(aes_gcm_encrypt(b"x", &[0u8; 16], &[0u8; 11], &[], 128).is_empty());
+        assert!(aes_gcm_encrypt(b"x", &[0u8; 16], &[0u8; 12], &[], 64).is_empty());
+        assert!(aes_gcm_decrypt(&[0u8; 4], &[0u8; 16], &[0u8; 12], &[], 128).is_empty());
+
+        // RSA: nothing to encrypt, nothing to encrypt with, and a key that is not a PEM.
+        assert!(rsa_encrypt(&[], b"key", 1).is_empty());
+        assert!(rsa_encrypt(b"data", &[], 1).is_empty());
+        assert!(rsa_encrypt(b"data", b"not a pem", 1).is_empty());
+        assert!(rsa_decrypt(&[], b"key", 1).is_empty());
+        assert!(rsa_decrypt(b"data", b"not a pem", 1).is_empty());
+
+        // Base64: nothing to decode, bytes that are not text, and text that is not base64.
+        assert!(base64_decode(&[], true).is_empty());
+        assert!(base64_decode(&[0xff, 0xfe, 0xfd, 0xfc], true).is_empty());
+        assert!(base64_decode(b"not base64!!", true).is_empty());
+    }
+
     #[test]
     fn base64_new_line_options() {
         let data = vec![0x41u8; 100];

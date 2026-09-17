@@ -58,3 +58,4 @@ cargo xtask build --target wasm --release   # also: android, ohos, ios (each nee
 | Byte buffers: `ngenrs_crypto_rand`, AES / RSA / hash / base64 outputs | `ngenrs_free_bytes(ptr, len)` |
 | C strings: `ngenrs_crypto_rsa_gen_key`, `ngenrs_*_read_string`, `ngenrs_db_get_string`, `ngenrs_http_parse_rsp_body` | `ngenrs_free_cstr(ptr)` |
 | Handles: `ngenrs_*_open` / `_init` / `_query` | the matching `ngenrs_*_close` / `_release` / `_free_*` |
+| HTTP responses: `ngenrs_http_get` / `_post` / `_download` / `_upload` | `ngenrs_http_release_rsp(rsp)` |

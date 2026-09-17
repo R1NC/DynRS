@@ -2,11 +2,11 @@
 //!
 //! The NDK ships no OpenSSL (no headers, no import libraries), which is why the manifest builds it
 //! from source for this target. Its `clang` wrappers carry the target and the API level in their
-//! names, but `libquickjs-ng-sys` calls `cc` with a bare `clang`, so those flags are repeated in
-//! `CFLAGS_…` and `BINDGEN_EXTRA_CLANG_ARGS_…` as well.
+//! names, but `libquickjs-ng-sys` calls `cc` with a bare `clang` and ignores `CC_…`, so the
+//! compiler is named in `TARGET_CC` and the flags are repeated in `CFLAGS_…` and
+//! `BINDGEN_EXTRA_CLANG_ARGS_…` as well. Nothing is linked, so no linker is set up here.
 
 use std::env;
-use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -14,7 +14,8 @@ use crate::util;
 
 const TARGET: &str = "aarch64-linux-android";
 const CLANG: &str = "aarch64-linux-android24-clang";
-const FLAGS: &str = "--target=aarch64-linux-android24";
+/// The triple clang itself is told, which carries the API level, unlike the cargo one.
+const CLANG_TARGET: &str = "aarch64-linux-android24";
 
 pub fn build(sdk_root: Option<&Path>, release: bool) -> Result<(), String> {
     let ndk = sdk_root
@@ -38,46 +39,23 @@ pub fn build(sdk_root: Option<&Path>, release: bool) -> Result<(), String> {
         return Err(format!("no sysroot in {}", prebuilt.display()));
     }
 
-    let flags = format!("{FLAGS} --sysroot={}", util::flag_path(&sysroot));
-    println!("ndk:      {}", ndk.display());
+    println!("ndk:       {}", ndk.display());
     println!("toolchain: {}", bin.display());
-    println!("sysroot:  {}", sysroot.display());
+    println!("sysroot:   {}", sysroot.display());
 
-    let envs = vec![
-        ("PATH".to_string(), util::path_with_front(&[&bin])),
-        (
-            "ANDROID_NDK_ROOT".to_string(),
-            ndk.as_os_str().to_os_string(),
-        ),
-        (
-            "CC_aarch64_linux_android".to_string(),
-            clang.as_os_str().to_os_string(),
-        ),
-        (
-            "AR_aarch64_linux_android".to_string(),
-            ar.as_os_str().to_os_string(),
-        ),
-        (
-            "RANLIB_aarch64_linux_android".to_string(),
-            ranlib.as_os_str().to_os_string(),
-        ),
-        (
-            "CFLAGS_aarch64_linux_android".to_string(),
-            OsString::from(&flags),
-        ),
-        (
-            "BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android".to_string(),
-            OsString::from(flags),
-        ),
-        (
-            "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER".to_string(),
-            clang.as_os_str().to_os_string(),
-        ),
-        (
-            "CARGO_TARGET_AARCH64_LINUX_ANDROID_AR".to_string(),
-            ar.as_os_str().to_os_string(),
-        ),
-    ];
+    let toolchain = util::Clang {
+        dir: &bin,
+        clang: &clang,
+        ar: &ar,
+        ranlib: &ranlib,
+        sysroot: &sysroot,
+    };
+    let mut envs = toolchain.env(TARGET, CLANG_TARGET);
+    // `openssl-src` finds the NDK through this one as well.
+    envs.push((
+        "ANDROID_NDK_ROOT".to_string(),
+        ndk.as_os_str().to_os_string(),
+    ));
 
     util::cargo_build(TARGET, release, &envs)
 }

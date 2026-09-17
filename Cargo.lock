@@ -84,9 +84,9 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "bindgen"
-version = "0.71.1"
+version = "0.72.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f58bf3d7db68cfbac37cfc485a8d711e87e064c3d0fe0435b92f7a407f9d6b3"
+checksum = "993776b509cfb49c750f11b8f07a46fa23e0a1386ffc01fb1e7d343efc387895"
 dependencies = [
  "bitflags",
  "cexpr",
@@ -390,7 +390,6 @@ dependencies = [
  "libquickjs-ng-sys",
  "md-5",
  "mlua",
- "once_cell",
  "openssl",
  "rand 0.10.2",
  "redb",
@@ -1033,9 +1032,9 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "libquickjs-ng-sys"
-version = "0.8.0"
+version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c25ee02fb02b1a0b1e844ab4786b29b8c7a8a70284d422f41a93097908cdf81"
+checksum = "7ff602f27b4336428a16f9f7d373d7436139afedf31ec9be02829d639f02a954"
 dependencies = [
  "bindgen",
  "cc",

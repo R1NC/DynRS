@@ -68,7 +68,7 @@ jobs:
             ${{ runner.os }}-android-arm64-v8a-cargo-
 
       # The NDK - whichever one the runner image ships - and the compiler settings the vendored C
-      # and OpenSSL need are found by the build helper; see `xtask/src/android.rs`.
+      # and OpenSSL need are found by the build helper; see `xtask/src/targets/android.rs`.
       - name: Build
         run: cargo xtask build --target android --release
 

@@ -11,21 +11,21 @@
 //! cargo xtask test-report --input test-output.txt --output test-report.html
 //! ```
 
-mod android;
-mod ios;
-mod ohos;
 mod report;
+mod site;
+mod targets;
 mod util;
-mod wasm;
 
 use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 const USAGE: &str = "\
-Builds a target whose C toolchain comes from an SDK, and renders the HTML test report.
+Builds a target whose C toolchain comes from an SDK, and renders the reports the site holds.
 
 Usage: cargo xtask build --target <wasm|android|ohos|ios> [--release] [--sdk-root <path>]
+       cargo xtask report
+       cargo xtask site --output <dir>
        cargo xtask test-report --input <log> --output <html>
 
   wasm     wasm32-unknown-emscripten  Emscripten, found through `EMSDK`
@@ -37,6 +37,10 @@ Usage: cargo xtask build --target <wasm|android|ohos|ios> [--release] [--sdk-roo
 
 `--sdk-root` overrides the search above. Every other target keeps `cargo build` as it was: the
 static library and the `qjsc` tool.
+
+`report` runs the tests under `cargo llvm-cov`, writing `coverage/` and `test-report.html`;
+`--fail-under-lines <percent>` turns a coverage below that floor into a failure.
+`site` lays those two, the API docs and the landing page out as the site to publish.
 ";
 
 fn main() -> ExitCode {
@@ -54,13 +58,48 @@ fn run(args: Vec<String>) -> Result<(), String> {
     let command = args.next();
     match command.as_deref() {
         Some("build") => build(args),
+        Some("report") => report_command(args),
+        Some("site") => site_command(args),
         Some("test-report") => test_report(args),
         Some("help" | "--help" | "-h") | None => {
             print!("{USAGE}");
             Ok(())
         }
-        Some(other) => Err(format!("unknown command `{other}`\n\n{USAGE}")),
+        Some(other) => Err(format!("unknown command `{other}\n\n{USAGE}")),
     }
+}
+
+fn report_command(mut args: impl Iterator<Item = String>) -> Result<(), String> {
+    let mut fail_under = None;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--fail-under-lines" => {
+                let value = args.next().ok_or("`--fail-under-lines` needs a value")?;
+                fail_under = Some(
+                    value
+                        .parse::<f64>()
+                        .map_err(|_| format!("`{value}` is not a percentage"))?,
+                );
+            }
+            other => return Err(format!("unknown argument `{other}\n\n{USAGE}")),
+        }
+    }
+    report::run(fail_under)
+}
+
+fn site_command(mut args: impl Iterator<Item = String>) -> Result<(), String> {
+    let mut output = None;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--output" => {
+                output = Some(PathBuf::from(
+                    args.next().ok_or("`--output` needs a value")?,
+                ))
+            }
+            other => return Err(format!("unknown argument `{other}\n\n{USAGE}")),
+        }
+    }
+    site::assemble(&output.ok_or("`--output` is required")?)
 }
 
 fn test_report(mut args: impl Iterator<Item = String>) -> Result<(), String> {
@@ -99,10 +138,10 @@ fn build(mut args: impl Iterator<Item = String>) -> Result<(), String> {
     let target = target.ok_or("`--target` is required")?;
     let sdk_root = sdk_root.as_deref();
     match target.as_str() {
-        "wasm" => wasm::build(sdk_root, release),
-        "android" => android::build(sdk_root, release),
-        "ohos" => ohos::build(sdk_root, release),
-        "ios" => ios::build(sdk_root, release),
+        "wasm" => targets::wasm::build(sdk_root, release),
+        "android" => targets::android::build(sdk_root, release),
+        "ohos" => targets::ohos::build(sdk_root, release),
+        "ios" => targets::ios::build(sdk_root, release),
         other => Err(format!(
             "unknown target `{other}`, expected `wasm`, `android`, `ohos` or `ios`"
         )),

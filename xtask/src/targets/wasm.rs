@@ -5,7 +5,8 @@
 //! * The C of the dependencies has to be compiled by the clang of the SDK. The headers of its
 //!   sysroot lean on `__INT64_C`/`__UINT64_C`, which only became predefined macros in LLVM 20, so
 //!   an older host clang cannot expand `UINT64_C`. `libquickjs-ng-sys` calls `cc` with `clang`
-//!   hard coded and ignores `CC`, which is why the toolchain goes in front of the `PATH`.
+//!   hard coded and ignores `CC`, but it reads `TARGET_CC`, which is what names the SDK clang
+//!   here; the toolchain still goes in front of the `PATH` for the other build scripts.
 //! * A `.wasm` module is a `cdylib`, and rustc links it as a *side* module, so every object of the
 //!   vendored C has to be position independent (hence `-fPIC`). `lua-src` compiles Lua as C++ on
 //!   Emscripten, so the flags are needed in `CXXFLAGS` as well.
@@ -33,12 +34,12 @@ pub fn build(sdk_root: Option<&Path>, release: bool) -> Result<(), String> {
             return Err(format!("`{tool}` is not in {}", system.display()));
         }
     }
-    if util::tool_in(&toolchain, "clang").is_none() {
-        return Err(format!(
+    let clang = util::tool_in(&toolchain, "clang").ok_or_else(|| {
+        format!(
             "no `clang` in {}, so the C would be built by the host one",
             toolchain.display()
-        ));
-    }
+        )
+    })?;
 
     let sysroot = ["cache/sysroot", "system"]
         .into_iter()
@@ -57,6 +58,9 @@ pub fn build(sdk_root: Option<&Path>, release: bool) -> Result<(), String> {
             "PATH".to_string(),
             util::path_with_front(&[&system, &toolchain]),
         ),
+        // `libquickjs-ng-sys` hard codes `clang` unless `TARGET_CC` names the compiler itself,
+        // which is the point of this target: only the clang of the SDK knows `__INT64_C`.
+        ("TARGET_CC".to_string(), clang.as_os_str().to_os_string()),
         ("CC_wasm32_unknown_emscripten".to_string(), "emcc".into()),
         ("CXX_wasm32_unknown_emscripten".to_string(), "em++".into()),
         ("AR_wasm32_unknown_emscripten".to_string(), "emar".into()),

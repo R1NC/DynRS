@@ -78,7 +78,7 @@ jobs:
 
       # That the C is compiled by the clang of the SDK, that the sysroot of its headers reaches
       # bindgen, and that a `.wasm` module is built as a `cdylib` are all handled by the build
-      # helper; see `xtask/src/wasm.rs`.
+      # helper; see `xtask/src/targets/wasm.rs`.
       - name: Build
         run: cargo xtask build --target wasm --release
 

@@ -8,6 +8,9 @@ pub mod core {
     #[cfg(not(target_arch = "wasm32"))]
     pub mod net;
     pub mod qjs;
+    // The two test suites that speak HTTP share a server on `127.0.0.1`.
+    #[cfg(test)]
+    pub(crate) mod net_test_server;
     pub mod timer;
     pub mod zip;
 }

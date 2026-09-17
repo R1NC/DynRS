@@ -1,11 +1,94 @@
-//! Renders the output of a test run as the HTML report that is published next to the coverage one.
+//! Runs the tests under `cargo llvm-cov`, and renders the HTML report of that run.
 //!
 //! The coverage report of `cargo llvm-cov` says which lines the tests have reached, but not which
-//! tests ran, so the log of the run is turned into a small page of its own.
+//! tests ran, so the log of the run is turned into a small page of its own. Both are written where
+//! the Pages site picks them up.
 
-use std::fs;
+use std::env;
+use std::ffi::OsString;
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
+use std::process::{Command, Stdio};
 
+use crate::util;
+
+/// What a run writes, relative to the repository root: the coverage report, the log of the test
+/// run, and the page rendered from it.
+const COVERAGE: &str = "coverage";
+const LOG: &str = "test-output.txt";
+const REPORT: &str = "test-report.html";
+
+/// Runs the tests with coverage and renders the unit test report of the same run. When
+/// `fail_under` names a percentage of lines, a run that covers less fails as well.
+pub fn run(fail_under: Option<f64>) -> Result<(), String> {
+    let root = util::repo_root();
+    let passed = coverage(&root)?;
+    test_report(&root.join(LOG), &root.join(REPORT))?;
+    if !passed {
+        return Err("the tests failed".to_string());
+    }
+    if let Some(floor) = fail_under {
+        let floor = floor.to_string();
+        println!("$ cargo llvm-cov report --fail-under-lines {floor}");
+        let met = llvm_cov(&root)
+            .args(["report", "--fail-under-lines", &floor])
+            .status()
+            .map_err(|error| format!("could not run `cargo llvm-cov report`: {error}"))?
+            .success();
+        if !met {
+            return Err(format!("line coverage is below {floor}%"));
+        }
+    }
+    Ok(())
+}
+
+/// Runs `cargo llvm-cov`; answers whether the tests passed and both coverage files were written.
+fn coverage(root: &Path) -> Result<bool, String> {
+    println!("$ cargo llvm-cov --locked --html --output-dir {COVERAGE}");
+    // Its stdout carries the `test …` lines the report is rendered from, so that stream is copied
+    // into the log as it arrives; its stderr stays on the console, where the progress is.
+    let mut child = llvm_cov(root)
+        .args(["--html", "--output-dir", COVERAGE])
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("could not run `cargo llvm-cov`: {error} -- is it installed?"))?;
+
+    let log = root.join(LOG);
+    let mut file = File::create(&log)
+        .map_err(|error| format!("could not write {}: {error}", log.display()))?;
+    let output = child.stdout.take().expect("stdout was piped");
+    for line in BufReader::new(output).lines() {
+        let line =
+            line.map_err(|error| format!("could not read what `cargo llvm-cov` printed: {error}"))?;
+        println!("{line}");
+        writeln!(file, "{line}")
+            .map_err(|error| format!("could not write {}: {error}", log.display()))?;
+    }
+    let tests_passed = child
+        .wait()
+        .map_err(|error| format!("`cargo llvm-cov` did not finish: {error}"))?
+        .success();
+
+    // The lcov file is the machine readable half of the coverage, which CI uploads next to it.
+    let lcov = format!("{COVERAGE}/lcov.info");
+    println!("$ cargo llvm-cov report --lcov --output-path {lcov}");
+    let reported = llvm_cov(root)
+        .args(["report", "--lcov", "--output-path", &lcov])
+        .status()
+        .map_err(|error| format!("could not run `cargo llvm-cov report`: {error}"))?
+        .success();
+
+    Ok(tests_passed && reported)
+}
+
+fn llvm_cov(root: &Path) -> Command {
+    let mut command = Command::new(env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo")));
+    command.current_dir(root).args(["llvm-cov", "--locked"]);
+    command
+}
+
+/// Renders `input`, the log of a test run, as the page at `output`.
 pub fn test_report(input: &Path, output: &Path) -> Result<(), String> {
     let log = fs::read_to_string(input)
         .map_err(|error| format!("could not read {}: {error}", input.display()))?;
@@ -80,7 +163,15 @@ pub fn test_report(input: &Path, output: &Path) -> Result<(), String> {
     html.push_str("</pre>\n</details>\n</body>\n</html>\n");
 
     fs::write(output, html)
-        .map_err(|error| format!("could not write {}: {error}", output.display()))
+        .map_err(|error| format!("could not write {}: {error}", output.display()))?;
+
+    println!(
+        "{} tests, {} failed -> {}",
+        outcomes.len(),
+        failed,
+        output.display()
+    );
+    Ok(())
 }
 
 fn escape(text: &str) -> String {

@@ -401,7 +401,13 @@ impl HttpClient {
 }
 
 #[cfg(test)]
+// The config lock is held on purpose across the requests of the tests below: they drive the
+// process-wide client, and the runtime of `#[tokio::test]` has a single thread, so the guard
+// cannot be the source of a deadlock here.
+#[allow(clippy::await_holding_lock)]
 mod tests {
+    use crate::core::net_test_server::{Server, behind_an_environment_proxy, ok};
+
     use super::*;
 
     fn lock_config() -> MutexGuard<'static, ()> {
@@ -501,5 +507,161 @@ mod tests {
         set_proxy(Some("127.0.0.1"), 1, "u", "p");
         assert!(CONFIG_VERSION.load(Ordering::SeqCst) > version);
         global_client().expect("client rebuilds after a config change");
+    }
+
+    fn test_client() -> HttpClient {
+        HttpClient::new(None).expect("a client without a fixed certificate")
+    }
+
+    #[tokio::test]
+    async fn get_sends_headers_and_a_body_and_reads_the_response() {
+        if behind_an_environment_proxy() {
+            return;
+        }
+        let _guard = lock_config();
+        reset_config();
+        let server = Server::start(ok("hello"));
+
+        let headers = HashMap::from([("x-request", "1")]);
+        let response = test_client()
+            .get(&server.url("/a"), Some(headers), Some("payload"))
+            .await
+            .expect("the request goes through");
+
+        assert_eq!(response.status, reqwest::StatusCode::OK);
+        assert_eq!(
+            response
+                .headers
+                .get("x-reply")
+                .and_then(|value| value.to_str().ok()),
+            Some("yes")
+        );
+        assert_eq!(response.body.as_deref(), Some("hello"));
+
+        let request = server.request(0);
+        let lowered = request.to_ascii_lowercase();
+        assert!(request.starts_with("GET /a HTTP/1.1"), "{request}");
+        assert!(lowered.contains("x-request: 1"), "{request}");
+        assert!(request.ends_with("payload"), "{request}");
+    }
+
+    #[tokio::test]
+    async fn post_turns_params_into_a_json_body() {
+        if behind_an_environment_proxy() {
+            return;
+        }
+        let _guard = lock_config();
+        reset_config();
+        let server = Server::start(ok("taken"));
+
+        let params = HashMap::from([("a", "1"), ("b", "not json")]);
+        let response = test_client()
+            .post(
+                &server.url("/json"),
+                None::<HashMap<&str, &str>>,
+                None,
+                Some(params),
+            )
+            .await
+            .expect("the request goes through");
+
+        assert_eq!(response.status, reqwest::StatusCode::OK);
+        let request = server.request(0);
+        let lowered = request.to_ascii_lowercase();
+        assert!(
+            lowered.contains("content-type: application/json"),
+            "{request}"
+        );
+        assert!(request.contains("\"a\":1"), "{request}");
+        // A value that is not JSON is dropped instead of failing the request, the way DynXX does.
+        assert!(!lowered.contains("not json"), "{request}");
+    }
+
+    #[tokio::test]
+    async fn post_sends_a_raw_body_when_there_are_no_params() {
+        if behind_an_environment_proxy() {
+            return;
+        }
+        let _guard = lock_config();
+        reset_config();
+        let server = Server::start(ok("taken"));
+
+        let response = test_client()
+            .post(
+                &server.url("/raw"),
+                None::<HashMap<String, String>>,
+                Some("plain"),
+                None::<HashMap<String, String>>,
+            )
+            .await
+            .expect("the request goes through");
+
+        assert_eq!(response.status, reqwest::StatusCode::OK);
+        let request = server.request(0);
+        assert!(request.ends_with("plain"), "{request}");
+        assert!(
+            !request.to_ascii_lowercase().contains("application/json"),
+            "{request}"
+        );
+    }
+
+    #[tokio::test]
+    async fn download_writes_the_response_into_a_file() {
+        if behind_an_environment_proxy() {
+            return;
+        }
+        let _guard = lock_config();
+        reset_config();
+        let server = Server::start(ok("hello"));
+
+        let path = std::env::temp_dir().join(format!("dynrs_download_{}.txt", std::process::id()));
+        let response = test_client()
+            .download(&server.url("/file"), None::<HashMap<String, String>>, &path)
+            .await
+            .expect("the request goes through");
+
+        assert_eq!(response.status, reqwest::StatusCode::OK);
+        assert!(response.body.is_none());
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("the file was written"),
+            "hello"
+        );
+        std::fs::remove_file(&path).expect("the file is removed again");
+
+        let request = server.request(0);
+        assert!(request.starts_with("GET /file"), "{request}");
+    }
+
+    #[tokio::test]
+    async fn upload_sends_a_multipart_form() {
+        if behind_an_environment_proxy() {
+            return;
+        }
+        let _guard = lock_config();
+        reset_config();
+        let server = Server::start(ok("stored"));
+
+        let parts = vec![(
+            "field".to_string(),
+            b"data".to_vec(),
+            Some("text/plain".to_string()),
+            Some("a.txt".to_string()),
+        )];
+        let response = test_client()
+            .upload(&server.url("/up"), None::<HashMap<String, String>>, parts)
+            .await
+            .expect("the request goes through");
+
+        assert_eq!(response.status, reqwest::StatusCode::OK);
+        let request = server.request(0);
+        let lowered = request.to_ascii_lowercase();
+        assert!(
+            lowered.contains("content-type: multipart/form-data; boundary="),
+            "{request}"
+        );
+        assert!(request.contains("name=\"field\""), "{request}");
+        assert!(request.contains("filename=\"a.txt\""), "{request}");
+        assert!(lowered.contains("content-type: text/plain"), "{request}");
+        assert!(request.contains("data"), "{request}");
     }
 }

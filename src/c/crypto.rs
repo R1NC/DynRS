@@ -516,4 +516,78 @@ mod tests {
         assert!(ngenrs_crypto_rsa_gen_key(broken.as_ptr(), true).is_null());
         assert!(ngenrs_crypto_rsa_gen_key(std::ptr::null(), true).is_null());
     }
+
+    /// The RSA entry points, which take the key as bytes and hand the ciphertext back.
+    #[test]
+    fn rsa_round_trips_through_the_c_abi() {
+        use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
+        use rsa::rand_core::OsRng;
+        use rsa::{RsaPrivateKey, RsaPublicKey};
+
+        let private = RsaPrivateKey::new(&mut OsRng, 1024).expect("a key pair is generated");
+        let public = RsaPublicKey::from(&private);
+        let private_pem = private
+            .to_pkcs8_pem(LineEnding::LF)
+            .expect("the private key encodes to PEM");
+        let public_pem = public
+            .to_public_key_pem(LineEnding::LF)
+            .expect("the public key encodes to PEM");
+
+        let message = b"c abi payload";
+
+        // 1 = PKCS#1 v1.5, the padding both sides support.
+        let mut out_len = 0;
+        let encrypted = take_bytes(
+            ngenrs_crypto_rsa_encrypt(
+                message.as_ptr(),
+                message.len(),
+                public_pem.as_bytes().as_ptr(),
+                public_pem.len(),
+                1,
+                &mut out_len,
+            ),
+            out_len,
+        );
+        assert!(!encrypted.is_empty(), "the message encrypts");
+        assert_ne!(encrypted.as_slice(), message.as_slice());
+
+        let mut out_len = 0;
+        let decrypted = take_bytes(
+            ngenrs_crypto_rsa_decrypt(
+                encrypted.as_ptr(),
+                encrypted.len(),
+                private_pem.as_bytes().as_ptr(),
+                private_pem.len(),
+                1,
+                &mut out_len,
+            ),
+            out_len,
+        );
+        assert_eq!(decrypted, message.to_vec());
+
+        // A key that is not a PEM at all is refused with an empty result.
+        let mut out_len = usize::MAX;
+        let refused = ngenrs_crypto_rsa_encrypt(
+            message.as_ptr(),
+            message.len(),
+            b"not a pem".as_ptr(),
+            9,
+            1,
+            &mut out_len,
+        );
+        assert!(take_bytes(refused, out_len).is_empty());
+        assert_eq!(out_len, 0);
+
+        let mut out_len = usize::MAX;
+        let refused = ngenrs_crypto_rsa_decrypt(
+            message.as_ptr(),
+            message.len(),
+            b"not a pem".as_ptr(),
+            9,
+            1,
+            &mut out_len,
+        );
+        assert!(take_bytes(refused, out_len).is_empty());
+        assert_eq!(out_len, 0);
+    }
 }

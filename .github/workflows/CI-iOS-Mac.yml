@@ -74,8 +74,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-ios-cargo-
 
-      # The SDK of the iPhoneOS toolchain, for bindgen and for the linker, is found by the build
-      # helper; see `xtask/src/ios.rs`.
+      # The SDK of the iPhoneOS toolchain, for bindgen, is found by the build helper; see
+      # `xtask/src/targets/ios.rs`.
       - name: Build
         run: cargo xtask build --target ios --release
 

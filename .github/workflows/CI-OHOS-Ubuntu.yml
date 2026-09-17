@@ -93,7 +93,7 @@ jobs:
             ${{ runner.os }}-ohos-cargo-
 
       # The SDK layout has changed between releases, so the toolchain and the sysroot inside it are
-      # searched for rather than hard coded; see `xtask/src/ohos.rs`.
+      # searched for rather than hard coded; see `xtask/src/targets/ohos.rs`.
       - name: Build
         run: cargo xtask build --target ohos --release --sdk-root "${GITHUB_WORKSPACE}/ohos-sdk/linux"
 

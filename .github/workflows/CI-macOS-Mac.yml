@@ -73,16 +73,10 @@ jobs:
       - name: Build
         run: cargo build --verbose --locked
 
-      # `cargo llvm-cov` is the Rust side of the same LLVM coverage that the C++ DynXX uses: it
-      # runs the tests, writes the coverage HTML to `coverage/`, and the log that `xtask
-      # test-report` renders as the unit test report.
+      # `cargo llvm-cov` is the Rust side of the same LLVM coverage that the C++ DynXX uses. The
+      # helper runs it and renders the unit test report, so this stays one command on every host.
       - name: Test
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo llvm-cov --locked --html --output-dir coverage 2>&1 | tee test-output.txt
-          cargo llvm-cov report --lcov --output-path coverage/lcov.info
-          cargo xtask test-report --input test-output.txt --output test-report.html
+        run: cargo xtask report
 
       # What people download from a run: the release static library and the qjsc compiler.
       - name: Build release artifacts

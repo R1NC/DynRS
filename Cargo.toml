@@ -22,7 +22,6 @@ path = "src/bin/qjsc.rs"
 
 [dependencies]
 libc = "0.2.189"
-once_cell = "1.21.4"
 serde_json = "1.0.151"
 futures = "0.3.34"
 # 3.0 dropped the v2 file format and 4.x only reads v3, so a store written by 2.x no longer opens.
@@ -46,7 +45,7 @@ sha2 = "0.10.9"
 base64 = "0.23.1"
 flate2 = { version = "1.1.10", features = ["zlib"] }
 mlua = { version = "0.12.1", features = ["lua54", "vendored"] }
-libquickjs-ng-sys = "0.8.0"
+libquickjs-ng-sys = "0.13.1"
 aes-gcm = "0.11.1"
 
 # The network module needs a socket stack and a TLS backend, neither of which wasm has. DynXX

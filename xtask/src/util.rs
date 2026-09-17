@@ -16,8 +16,9 @@ pub fn repo_root() -> PathBuf {
 
 /// The `PATH` of this process with `dirs` in front of it.
 ///
-/// The C of the dependencies is compiled by whatever `clang` the `PATH` holds - `cc` uses `CC` for
-/// most crates, but not for all of them - so this is how the toolchain of an SDK gets picked up.
+/// The compiler is named explicitly (`CC_…` and `TARGET_CC`), but the `PATH` is still how an SDK
+/// is found by the tools that look a name up on their own: bindgen for `libclang` and
+/// `llvm-config`, and emscripten for its `emcc`/`em++`/`emar` shims.
 pub fn path_with_front(dirs: &[&Path]) -> OsString {
     let separator = if cfg!(windows) { ";" } else { ":" };
     let mut value = OsString::new();
@@ -49,6 +50,49 @@ pub fn tool_in(dir: &Path, name: &str) -> Option<PathBuf> {
         .iter()
         .map(|suffix| dir.join(format!("{name}{suffix}")))
         .find(|path| path.is_file())
+}
+
+/// The clang toolchain of an SDK: the tools that compile the C and the sysroot whose headers go
+/// with them.
+pub struct Clang<'a> {
+    /// The directory the tools live in, which goes in front of the `PATH`.
+    pub dir: &'a Path,
+    pub clang: &'a Path,
+    pub ar: &'a Path,
+    pub ranlib: &'a Path,
+    pub sysroot: &'a Path,
+}
+
+impl Clang<'_> {
+    /// The environment that hands this toolchain to every build script of `cargo_target`.
+    ///
+    /// `clang_target` is the triple clang itself is told, which on Android carries the API level
+    /// as well. `cc` reads `CC_<target>`, but `libquickjs-ng-sys` hard codes `clang` and only
+    /// reads `TARGET_CC`, so both are set; the target and the sysroot are repeated in `CFLAGS`
+    /// and in the bindgen arguments because neither of those crates goes through the settings
+    /// `cc` would take them from.
+    pub fn env(&self, cargo_target: &str, clang_target: &str) -> Vec<(String, OsString)> {
+        let flags = format!(
+            "--target={clang_target} --sysroot={}",
+            flag_path(self.sysroot)
+        );
+        let suffix = cargo_target.replace('-', "_");
+        let cargo = cargo_target.to_uppercase().replace('-', "_");
+        let clang = self.clang.as_os_str().to_os_string();
+        let ar = self.ar.as_os_str().to_os_string();
+        let ranlib = self.ranlib.as_os_str().to_os_string();
+
+        vec![
+            ("PATH".to_string(), path_with_front(&[self.dir])),
+            ("TARGET_CC".to_string(), clang.clone()),
+            (format!("CC_{suffix}"), clang),
+            (format!("AR_{suffix}"), ar.clone()),
+            (format!("RANLIB_{suffix}"), ranlib),
+            (format!("CFLAGS_{suffix}"), flags.clone().into()),
+            (format!("BINDGEN_EXTRA_CLANG_ARGS_{suffix}"), flags.into()),
+            (format!("CARGO_TARGET_{cargo}_AR"), ar),
+        ]
+    }
 }
 
 /// The first file in `dir` whose name starts with `prefix`; the LLVM packages version their tools.
