@@ -9,14 +9,13 @@ on:
       - 'Cargo.lock'
       - '.cargo/**'
       - 'rust-toolchain.toml'
-      - '.github/workflows/CI-macOS-Mac.yml'
-  pull_request:
-    paths:
-      - 'src/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.cargo/**'
-      - 'rust-toolchain.toml'
+      # The build helper is one binary, so this host compiles all of it, but it only runs `report`:
+      # a change to a target module is for that target's workflow, and `Common` type-checks them.
+      - 'xtask/**'
+      - '!xtask/src/targets/android.rs'
+      - '!xtask/src/targets/ios.rs'
+      - '!xtask/src/targets/ohos.rs'
+      - '!xtask/src/targets/wasm.rs'
       - '.github/workflows/CI-macOS-Mac.yml'
   workflow_dispatch:
 

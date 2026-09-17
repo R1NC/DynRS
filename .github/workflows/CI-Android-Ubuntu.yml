@@ -8,15 +8,12 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.cargo/**'
+      # The build helper is one binary, so this host compiles all of it, but it only runs the
+      # Android module: a change to another target's module is for that target's workflow.
       - 'xtask/**'
-      - '.github/workflows/CI-Android-Ubuntu.yml'
-  pull_request:
-    paths:
-      - 'src/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.cargo/**'
-      - 'xtask/**'
+      - '!xtask/src/targets/ios.rs'
+      - '!xtask/src/targets/ohos.rs'
+      - '!xtask/src/targets/wasm.rs'
       - '.github/workflows/CI-Android-Ubuntu.yml'
   workflow_dispatch:
 

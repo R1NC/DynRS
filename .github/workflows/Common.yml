@@ -12,16 +12,6 @@ on:
       - '.cargo/**'
       - 'xtask/**'
       - '.github/workflows/Common.yml'
-  pull_request:
-    paths:
-      - 'src/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'rustfmt.toml'
-      - 'deny.toml'
-      - '.cargo/**'
-      - 'xtask/**'
-      - '.github/workflows/Common.yml'
   workflow_dispatch:
 
 env:
