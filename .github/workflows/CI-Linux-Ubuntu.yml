@@ -132,7 +132,8 @@ jobs:
           rm -rf "${site}"
           mkdir -p "${site}/coverage" "${site}/tests"
           cp .github/pages/index.html "${site}/index.html"
-          cp -a coverage/. "${site}/coverage/"
+          # `--output-dir coverage` puts the pages of the HTML report in `coverage/html`.
+          cp -a coverage/html/. "${site}/coverage/"
           cp test-report.html "${site}/tests/index.html"
 
       - name: Upload Pages artifact
