@@ -4,6 +4,8 @@ A cross-platform framework based on Rust, supporting biz dev via Lua & JS.
 
 > :point_right: The modern C++ version: [DynXX](https://github.com/R1NC/DynXX).
 
+[![Test Reports](https://img.shields.io/badge/Test_Reports-gray?logo=github)](https://R1NC.github.io/DynRS/)
+
 [![Windows](https://img.shields.io/github/actions/workflow/status/R1NC/DynRS/CI-Windows-Win.yml?branch=main&label=Windows)](https://github.com/R1NC/DynRS/actions/workflows/CI-Windows-Win.yml)
 [![Linux](https://img.shields.io/github/actions/workflow/status/R1NC/DynRS/CI-Linux-Ubuntu.yml?branch=main&label=Linux)](https://github.com/R1NC/DynRS/actions/workflows/CI-Linux-Ubuntu.yml)
 [![macOS](https://img.shields.io/github/actions/workflow/status/R1NC/DynRS/CI-macOS-Mac.yml?branch=main&label=macOS)](https://github.com/R1NC/DynRS/actions/workflows/CI-macOS-Mac.yml)

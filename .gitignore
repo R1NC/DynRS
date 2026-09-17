@@ -1,3 +1,9 @@
 # Cargo.lock is tracked on purpose: this workspace ships the `qjsc` binary and a cdylib,
 # so CI builds with --locked against a pinned dependency set.
 target
+
+# What `cargo llvm-cov --html --output-dir coverage` and `cargo xtask test-report` write, the way
+# the CI workflows do it. The reports that are published come from the Linux job.
+coverage
+test-output.txt
+test-report.html

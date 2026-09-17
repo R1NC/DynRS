@@ -9,6 +9,8 @@ on:
       - 'Cargo.lock'
       - '.cargo/**'
       - 'rust-toolchain.toml'
+      - 'xtask/**'
+      - '.github/pages/**'
       - '.github/workflows/CI-Linux-Ubuntu.yml'
   pull_request:
     paths:
@@ -17,11 +19,23 @@ on:
       - 'Cargo.lock'
       - '.cargo/**'
       - 'rust-toolchain.toml'
+      - 'xtask/**'
+      - '.github/pages/**'
       - '.github/workflows/CI-Linux-Ubuntu.yml'
   workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
+
+# The reports of this host are the ones that get published, so its deploys are serialized.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
 
 jobs:
   linux:
@@ -34,6 +48,11 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Detect libclang path
         shell: bash
@@ -65,8 +84,16 @@ jobs:
       - name: Build
         run: cargo build --verbose --locked
 
+      # `cargo llvm-cov` is the Rust side of the same LLVM coverage that the C++ DynXX uses: it
+      # runs the tests, writes the coverage HTML to `coverage/`, and the log that `xtask
+      # test-report` renders as the unit test report.
       - name: Test
-        run: cargo test --verbose --locked
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo llvm-cov --locked --html --output-dir coverage 2>&1 | tee test-output.txt
+          cargo llvm-cov report --lcov --output-path coverage/lcov.info
+          cargo xtask test-report --input test-output.txt --output test-report.html
 
       # What people download from a run: the release static library and the qjsc compiler.
       - name: Build release artifacts
@@ -80,3 +107,40 @@ jobs:
             target/release/libdynrs.a
             target/release/qjsc
           if-no-files-found: error
+
+      # Every host keeps its reports; only this one publishes them, the way DynXX publishes its
+      # coverage and unit test reports from its Linux job.
+      - name: Upload reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: Linux-Ubuntu-reports
+          path: |
+            coverage/
+            test-report.html
+          if-no-files-found: error
+
+      - name: Setup Pages
+        if: github.ref == 'refs/heads/main'
+        uses: actions/configure-pages@v6
+
+      - name: Prepare Pages site
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+          site="${RUNNER_TEMP}/pages-site"
+          rm -rf "${site}"
+          mkdir -p "${site}/coverage" "${site}/tests"
+          cp .github/pages/index.html "${site}/index.html"
+          cp -a coverage/. "${site}/coverage/"
+          cp test-report.html "${site}/tests/index.html"
+
+      - name: Upload Pages artifact
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: ${{ runner.temp }}/pages-site
+
+      - name: Deploy to GitHub Pages
+        if: github.ref == 'refs/heads/main'
+        uses: actions/deploy-pages@v5

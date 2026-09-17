@@ -1,6 +1,6 @@
-//! Build helper for the targets whose C toolchain comes from an SDK.
+//! Repository automation: the cross builds, and the HTML test report.
 //!
-//! `cargo build --target …` cannot express what those targets need: the path of the SDK is only
+//! `cargo build --target …` cannot express what the cross targets need: the path of the SDK is only
 //! known at run time, the vendored C reads `CC`/`CFLAGS`/`CXXFLAGS` from the environment, and the
 //! `.cargo/config.toml` does not expand `${env.…}`. This binary locates the SDK, exports the
 //! settings the crates expect and then runs cargo, so the CI workflows only have to install the
@@ -8,11 +8,13 @@
 //!
 //! ```text
 //! cargo xtask build --target ohos --release --sdk-root /path/to/ohos-sdk/linux
+//! cargo xtask test-report --input test-output.txt --output test-report.html
 //! ```
 
 mod android;
 mod ios;
 mod ohos;
+mod report;
 mod util;
 mod wasm;
 
@@ -21,9 +23,10 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 const USAGE: &str = "\
-Builds a target whose C toolchain comes from an SDK.
+Builds a target whose C toolchain comes from an SDK, and renders the HTML test report.
 
 Usage: cargo xtask build --target <wasm|android|ohos|ios> [--release] [--sdk-root <path>]
+       cargo xtask test-report --input <log> --output <html>
 
   wasm     wasm32-unknown-emscripten  Emscripten, found through `EMSDK`
   android  aarch64-linux-android      the NDK, found through `ANDROID_NDK_HOME`,
@@ -48,15 +51,37 @@ fn main() -> ExitCode {
 
 fn run(args: Vec<String>) -> Result<(), String> {
     let mut args = args.into_iter();
-    match args.next().as_deref() {
-        Some("build") => {}
+    let command = args.next();
+    match command.as_deref() {
+        Some("build") => build(args),
+        Some("test-report") => test_report(args),
         Some("help" | "--help" | "-h") | None => {
             print!("{USAGE}");
-            return Ok(());
+            Ok(())
         }
-        Some(other) => return Err(format!("unknown command `{other}`\n\n{USAGE}")),
+        Some(other) => Err(format!("unknown command `{other}`\n\n{USAGE}")),
     }
+}
 
+fn test_report(mut args: impl Iterator<Item = String>) -> Result<(), String> {
+    let (mut input, mut output) = (None, None);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--input" => input = Some(PathBuf::from(args.next().ok_or("`--input` needs a value")?)),
+            "--output" => {
+                output = Some(PathBuf::from(
+                    args.next().ok_or("`--output` needs a value")?,
+                ))
+            }
+            other => return Err(format!("unknown argument `{other}`\n\n{USAGE}")),
+        }
+    }
+    let input = input.ok_or("`--input` is required")?;
+    let output = output.ok_or("`--output` is required")?;
+    report::test_report(&input, &output)
+}
+
+fn build(mut args: impl Iterator<Item = String>) -> Result<(), String> {
     let (mut target, mut release, mut sdk_root) = (None, false, None);
     while let Some(arg) = args.next() {
         match arg.as_str() {

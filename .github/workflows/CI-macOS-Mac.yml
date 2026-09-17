@@ -34,6 +34,11 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Detect libclang path
         shell: bash
@@ -68,8 +73,16 @@ jobs:
       - name: Build
         run: cargo build --verbose --locked
 
+      # `cargo llvm-cov` is the Rust side of the same LLVM coverage that the C++ DynXX uses: it
+      # runs the tests, writes the coverage HTML to `coverage/`, and the log that `xtask
+      # test-report` renders as the unit test report.
       - name: Test
-        run: cargo test --verbose --locked
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo llvm-cov --locked --html --output-dir coverage 2>&1 | tee test-output.txt
+          cargo llvm-cov report --lcov --output-path coverage/lcov.info
+          cargo xtask test-report --input test-output.txt --output test-report.html
 
       # What people download from a run: the release static library and the qjsc compiler.
       - name: Build release artifacts
@@ -82,4 +95,13 @@ jobs:
           path: |
             target/release/libdynrs.a
             target/release/qjsc
+          if-no-files-found: error
+
+      - name: Upload reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: macOS-Mac-reports
+          path: |
+            coverage/
+            test-report.html
           if-no-files-found: error
