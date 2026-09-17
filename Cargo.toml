@@ -25,7 +25,9 @@ libc = "0.2.189"
 once_cell = "1.21.4"
 serde_json = "1.0.151"
 futures = "0.3.34"
-redb = "2.6.3"
+# 3.0 dropped the v2 file format and 4.x only reads v3, so a store written by 2.x no longer opens.
+# Nothing released has one yet. It is also what sets the Rust 1.90 floor.
+redb = "4.3.0"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 hex = "0.4.3"
 ecb = { version = "0.2.1", features = ["alloc"] }

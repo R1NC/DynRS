@@ -34,7 +34,7 @@ A cross-platform framework based on Rust, supporting biz dev via Lua & JS.
 
 ## :hammer_and_wrench: Build
 
-* Rust 1.89+ (edition 2024). The floor is set by the dependency graph, not by the edition.
+* Rust 1.90+ (edition 2024). The floor is set by the dependency graph, not by the edition.
 * `libclang` for `bindgen` (via `libquickjs-ng-sys`); set `LIBCLANG_PATH` when it is not on `PATH`.
 * A C toolchain for the vendored QuickJS, Lua and SQLite.
 

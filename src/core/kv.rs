@@ -4,8 +4,8 @@
 #![allow(clippy::result_large_err)]
 
 use redb::{
-    Database, Error, Key, ReadOnlyTable, ReadTransaction, ReadableTable, StorageError,
-    TableDefinition, TableError, Value,
+    Database, Error, Key, ReadOnlyTable, ReadTransaction, ReadableDatabase, ReadableTable,
+    StorageError, TableDefinition, TableError, Value,
 };
 use std::collections::BTreeSet;
 use std::path::Path;
