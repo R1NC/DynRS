@@ -10,6 +10,11 @@
 //! * A `.wasm` module is a `cdylib`, and rustc links it as a *side* module, so every object of the
 //!   vendored C has to be position independent (hence `-fPIC`). `lua-src` compiles Lua as C++ on
 //!   Emscripten, so the flags are needed in `CXXFLAGS` as well.
+//! * clang gives a declaration hidden visibility unless the header marks it on this target, and
+//!   `bindgen` skips whatever is not default visible, so the bindings lose every function whose
+//!   header does not mark it. `libquickjs-ng-sys` 0.13 marks its API only when the header is built
+//!   as a shared library, so its bindings would be empty of functions; see the `-fvisibility`
+//!   argument below.
 
 use std::env;
 use std::ffi::OsString;
@@ -72,9 +77,13 @@ pub fn build(sdk_root: Option<&Path>, release: bool) -> Result<(), String> {
             "CXXFLAGS_wasm32_unknown_emscripten".to_string(),
             format!("{sysroot_arg} -fPIC").into(),
         ),
+        // `bindgen` asks clang for the API of the headers, and clang hides every declaration this
+        // target does not see marked (`JS_EXTERN` expands to nothing unless the header is built as
+        // a shared library). `bindgen` then drops the hidden declarations, so `-fvisibility=default`
+        // is what leaves it with the same API the other targets see.
         (
             "BINDGEN_EXTRA_CLANG_ARGS_wasm32_unknown_emscripten".to_string(),
-            OsString::from(sysroot_arg),
+            OsString::from(format!("{sysroot_arg} -fvisibility=default")),
         ),
     ];
 
