@@ -50,7 +50,17 @@ aes-gcm = "0.11.1"
 # The network module needs a socket stack and a TLS backend, neither of which wasm has. DynXX
 # leaves curl out of its Emscripten build for the same reason.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-reqwest = { version = "0.12.28", features = ["json", "stream", "native-tls", "multipart"] }
+# 0.13 makes `rustls` (over `aws-lc-rs`) the default TLS backend, which does not cross compile for
+# the mobile targets, so the defaults are turned off and listed back by hand, keeping `native-tls`.
+reqwest = { version = "0.13.5", default-features = false, features = [
+    "charset",
+    "http2",
+    "json",
+    "multipart",
+    "native-tls",
+    "stream",
+    "system-proxy",
+] }
 tokio = { version = "1.53.1", features = ["full"] }
 
 # `native-tls` reaches for OpenSSL on Android and HarmonyOS, and neither SDK ships it for linking:
