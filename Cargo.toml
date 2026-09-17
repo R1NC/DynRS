@@ -28,16 +28,20 @@ futures = "0.3.34"
 redb = "2.6.3"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 hex = "0.4.3"
-block-modes = "0.8.1"
-aes = "0.7.5"
+ecb = { version = "0.2.1", features = ["alloc"] }
+# `block-modes` is deprecated by RustCrypto in favour of `ecb`/`cbc`; 0.9 is the line that pairs
+# with the `aes` 0.9 that `aes-gcm` already pulls in, so both use one copy of the cipher crates.
+aes = "0.9.3"
 # 0.9.10 is the first release without the panicking key parsing (CVE-2026-21895); the crate has no
 # fix for the Marvin timing sidechannel (CVE-2023-49092), so that one stays open on purpose.
 rsa = "0.9.10"
-rand = "0.9.5"
+rand = "0.10.2"
+# `rsa` 0.9 brings `digest` 0.10 in, so these three stay on that line: 0.11 would give a `Digest`
+# trait that the RSA paddings are not implemented for. Move them together with `rsa`.
 md5 = { package = "md-5", version = "0.10.6" }
 sha1 = "0.10.7"
 sha2 = "0.10.9"
-base64 = "0.22.1"
+base64 = "0.23.1"
 flate2 = { version = "1.1.10", features = ["zlib"] }
 mlua = { version = "0.9.9", features = ["lua54", "vendored"] }
 libquickjs-ng-sys = "0.8.0"

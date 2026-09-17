@@ -2,16 +2,15 @@
 // (Rust 1.85), so the modulo checks stay written as they are.
 #![allow(clippy::manual_is_multiple_of)]
 
-use aes::{Aes128 as Aes128Cipher, Aes192 as Aes192Cipher, Aes256 as Aes256Cipher};
+use aes::cipher::{BlockModeDecrypt, BlockModeEncrypt, block_padding::Pkcs7};
 use aes_gcm::AesGcm;
 use aes_gcm::aead::{AeadInOut, KeyInit};
 use aes_gcm::aes::cipher::consts::{U12, U13, U14, U15, U16};
 use aes_gcm::aes::{Aes128 as Aes128Gcm, Aes192 as Aes192Gcm, Aes256 as Aes256Gcm};
 use base64::{Engine as _, engine::general_purpose};
-use block_modes::block_padding::Pkcs7;
-use block_modes::{BlockMode, Ecb};
+use ecb::{Decryptor, Encryptor};
 use md5::{Digest, Md5};
-use rand::RngCore;
+use rand::RngExt;
 use rsa::pkcs1::DecodeRsaPrivateKey;
 use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey};
 use rsa::rand_core::OsRng;
@@ -93,10 +92,6 @@ pub fn bytes2hex(bytes: &[u8]) -> String {
     hex::encode(bytes)
 }
 
-type Aes128EcbCipher = Ecb<Aes128Cipher, Pkcs7>;
-type Aes192EcbCipher = Ecb<Aes192Cipher, Pkcs7>;
-type Aes256EcbCipher = Ecb<Aes256Cipher, Pkcs7>;
-
 /// Mirrors `checkAesParams` in `Crypto-OpenSSL.cxx`:
 /// input must be non-empty, key length a multiple of 8 within `16..=32`.
 fn check_aes_params(input: &[u8], key: &[u8]) -> bool {
@@ -108,13 +103,16 @@ pub fn aes_encrypt(input: &[u8], key: &[u8]) -> Vec<u8> {
     if !check_aes_params(input, key) {
         return Vec::new();
     }
-    match key.len() {
-        16 => Aes128EcbCipher::new_from_slices(key, &[]).map(|c| c.encrypt_vec(input)),
-        24 => Aes192EcbCipher::new_from_slices(key, &[]).map(|c| c.encrypt_vec(input)),
-        32 => Aes256EcbCipher::new_from_slices(key, &[]).map(|c| c.encrypt_vec(input)),
-        _ => Err(block_modes::InvalidKeyIvLength),
-    }
-    .unwrap_or_default()
+    let encrypted = match key.len() {
+        16 => Encryptor::<aes::Aes128>::new_from_slice(key)
+            .map(|cipher| cipher.encrypt_padded_vec::<Pkcs7>(input)),
+        24 => Encryptor::<aes::Aes192>::new_from_slice(key)
+            .map(|cipher| cipher.encrypt_padded_vec::<Pkcs7>(input)),
+        32 => Encryptor::<aes::Aes256>::new_from_slice(key)
+            .map(|cipher| cipher.encrypt_padded_vec::<Pkcs7>(input)),
+        _ => return Vec::new(),
+    };
+    encrypted.unwrap_or_default()
 }
 
 /// AES-ECB + PKCS7, mirroring DynXX `Core::Crypto::AES::decrypt`.
@@ -122,19 +120,19 @@ pub fn aes_decrypt(input: &[u8], key: &[u8]) -> Vec<u8> {
     if !check_aes_params(input, key) {
         return Vec::new();
     }
-    match key.len() {
-        16 => Aes128EcbCipher::new_from_slices(key, &[])
+    let decrypted = match key.len() {
+        16 => Decryptor::<aes::Aes128>::new_from_slice(key)
             .ok()
-            .and_then(|c| c.decrypt_vec(input).ok()),
-        24 => Aes192EcbCipher::new_from_slices(key, &[])
+            .and_then(|cipher| cipher.decrypt_padded_vec::<Pkcs7>(input).ok()),
+        24 => Decryptor::<aes::Aes192>::new_from_slice(key)
             .ok()
-            .and_then(|c| c.decrypt_vec(input).ok()),
-        32 => Aes256EcbCipher::new_from_slices(key, &[])
+            .and_then(|cipher| cipher.decrypt_padded_vec::<Pkcs7>(input).ok()),
+        32 => Decryptor::<aes::Aes256>::new_from_slice(key)
             .ok()
-            .and_then(|c| c.decrypt_vec(input).ok()),
+            .and_then(|cipher| cipher.decrypt_padded_vec::<Pkcs7>(input).ok()),
         _ => None,
-    }
-    .unwrap_or_default()
+    };
+    decrypted.unwrap_or_default()
 }
 
 /// Mirrors `checkAesGcmParams`: IV exactly 12 bytes, AAD at most 16 bytes,
@@ -324,7 +322,7 @@ pub fn rand(len: usize) -> Vec<u8> {
         return Vec::new();
     }
     let mut out = vec![0u8; len];
-    rand::rng().fill_bytes(&mut out);
+    rand::rng().fill(&mut out);
     out
 }
 
