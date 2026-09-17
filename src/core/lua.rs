@@ -56,7 +56,7 @@ impl LuaBridge {
                         )));
                     }
                 };
-                func.call::<_, ()>(())?;
+                func.call::<()>(())?;
             }
             Ok(())
         })
@@ -91,7 +91,7 @@ impl LuaBridge {
             .globals()
             .get(func_name)
             .map_err(|e| e.to_string())?;
-        func.call::<_, String>(arg).map_err(|e| e.to_string())
+        func.call::<String>(arg).map_err(|e| e.to_string())
     }
 
     /// Registers a Rust function as a global the script can call. The closure receives all of the
@@ -99,7 +99,7 @@ impl LuaBridge {
     pub fn export_function<F, R>(&self, name: &str, func: F) -> Result<(), String>
     where
         F: Fn(&Lua, mlua::MultiValue) -> mlua::Result<R> + 'static,
-        R: for<'lua> mlua::IntoLuaMulti<'lua>,
+        R: mlua::IntoLuaMulti,
     {
         let lua_func = self.lua.create_function(func).map_err(|e| e.to_string())?;
         self.lua
@@ -112,8 +112,8 @@ impl LuaBridge {
     pub fn export_rust_fn<F, A, R>(&self, name: &str, func: F) -> Result<(), String>
     where
         F: Fn(A) -> R + 'static,
-        A: for<'lua> mlua::FromLuaMulti<'lua>,
-        R: for<'lua> mlua::IntoLuaMulti<'lua>,
+        A: mlua::FromLuaMulti,
+        R: mlua::IntoLuaMulti,
     {
         let lua_func = self
             .lua
