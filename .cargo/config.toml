@@ -1,17 +1,8 @@
-# The cross builds are driven by `cargo xtask build --target <wasm|android|ohos>`: it looks for the
-# SDK of the target and exports what cannot be expressed here (`${env.…}` is not expanded in this
-# file, and the vendored C reads `CC`/`CFLAGS`/`CXXFLAGS` from the environment).
+# The cross builds are driven by `cargo xtask build --target <wasm|android|ohos|ios>`: it looks
+# for the SDK of the target and exports what cannot be expressed here (`${env.…}` is not expanded
+# in this file, and the vendored C reads `CC`/`CFLAGS`/`CXXFLAGS` from the environment).
 [alias]
 xtask = "run --package xtask --"
-
-[target.aarch64-apple-ios]
-linker = "xcrun -sdk iphoneos clang"
-rustflags = [
-  "-C", "link-arg=-static",
-  "-C", "link-arg=-fembed-bitcode",
-  "-C", "link-arg=-isysroot",
-  "-C", "link-arg=$(xcrun --sdk iphoneos --show-sdk-path)"
-]
 
 # No `-static` for the macOS host triple: macOS cannot link executables statically
 # (`ld: library 'crt0.o' not found`), and build scripts, proc macros, the cdylib and the `qjsc`

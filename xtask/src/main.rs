@@ -11,6 +11,7 @@
 //! ```
 
 mod android;
+mod ios;
 mod ohos;
 mod util;
 mod wasm;
@@ -22,13 +23,14 @@ use std::process::ExitCode;
 const USAGE: &str = "\
 Builds a target whose C toolchain comes from an SDK.
 
-Usage: cargo xtask build --target <wasm|android|ohos> [--release] [--sdk-root <path>]
+Usage: cargo xtask build --target <wasm|android|ohos|ios> [--release] [--sdk-root <path>]
 
   wasm     wasm32-unknown-emscripten  Emscripten, found through `EMSDK`
   android  aarch64-linux-android      the NDK, found through `ANDROID_NDK_HOME`,
                                       `ANDROID_NDK_ROOT`, `ANDROID_NDK_LATEST_HOME` or an
                                       `ndk/` directory of `ANDROID_HOME`/`ANDROID_SDK_ROOT`
   ohos     aarch64-unknown-linux-ohos the HarmonyOS SDK, found through `OHOS_SDK_ROOT`
+  ios      aarch64-apple-ios          the iPhoneOS SDK of Xcode, found through `xcrun`
 
 `--sdk-root` overrides the search above. Every other target keeps `cargo build` as it was: the
 static library and the `qjsc` tool.
@@ -75,8 +77,9 @@ fn run(args: Vec<String>) -> Result<(), String> {
         "wasm" => wasm::build(sdk_root, release),
         "android" => android::build(sdk_root, release),
         "ohos" => ohos::build(sdk_root, release),
+        "ios" => ios::build(sdk_root, release),
         other => Err(format!(
-            "unknown target `{other}`, expected `wasm`, `android` or `ohos`"
+            "unknown target `{other}`, expected `wasm`, `android`, `ohos` or `ios`"
         )),
     }
 }

@@ -1,0 +1,87 @@
+name: CI-iOS-Mac
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - 'xtask/**'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/CI-iOS-Mac.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - 'xtask/**'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/CI-iOS-Mac.yml'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+# One macOS host, the arm64 device ABI, library only: the tests of this crate run on the host, so
+# this target is a build check (the same shape as the Android and OHOS ones). The SDK comes with
+# Xcode, and Apple builds link the Security framework instead of OpenSSL, so there is nothing to
+# download or to build from source here.
+
+jobs:
+  ios:
+    name: ios (arm64)
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - name: Detect libclang path
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="$(cd "$(dirname "$(xcrun --find clang)")/../lib" && pwd)"
+          if [ ! -e "${dir}/libclang.dylib" ]; then
+            prefix="$(brew --prefix llvm 2>/dev/null || true)"
+            if [ -n "${prefix}" ] && [ -e "${prefix}/lib/libclang.dylib" ]; then
+              dir="${prefix}/lib"
+            fi
+          fi
+          if [ -e "${dir}/libclang.dylib" ]; then
+            echo "LIBCLANG_PATH=${dir}" >> "${GITHUB_ENV}"
+            echo "LIBCLANG_PATH=${dir}"
+          else
+            echo "::warning::libclang.dylib not found, bindgen falls back to its own search"
+          fi
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-ios-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-ios-cargo-
+
+      # The SDK of the iPhoneOS toolchain, for bindgen and for the linker, is found by the build
+      # helper; see `xtask/src/ios.rs`.
+      - name: Build
+        run: cargo xtask build --target ios --release
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: iOS-arm64-build
+          path: target/aarch64-apple-ios/release/libdynrs.a
+          if-no-files-found: error

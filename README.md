@@ -7,6 +7,7 @@ A cross-platform framework based on Rust, supporting biz dev via Lua & JS.
 [![Windows](https://img.shields.io/github/actions/workflow/status/R1NC/DynRS/CI-Windows-Win.yml?branch=main&label=Windows)](https://github.com/R1NC/DynRS/actions/workflows/CI-Windows-Win.yml)
 [![Linux](https://img.shields.io/github/actions/workflow/status/R1NC/DynRS/CI-Linux-Ubuntu.yml?branch=main&label=Linux)](https://github.com/R1NC/DynRS/actions/workflows/CI-Linux-Ubuntu.yml)
 [![macOS](https://img.shields.io/github/actions/workflow/status/R1NC/DynRS/CI-macOS-Mac.yml?branch=main&label=macOS)](https://github.com/R1NC/DynRS/actions/workflows/CI-macOS-Mac.yml)
+[![iOS](https://img.shields.io/github/actions/workflow/status/R1NC/DynRS/CI-iOS-Mac.yml?branch=main&label=iOS)](https://github.com/R1NC/DynRS/actions/workflows/CI-iOS-Mac.yml)
 [![Android](https://img.shields.io/github/actions/workflow/status/R1NC/DynRS/CI-Android-Ubuntu.yml?branch=main&label=Android)](https://github.com/R1NC/DynRS/actions/workflows/CI-Android-Ubuntu.yml)
 [![OHOS](https://img.shields.io/github/actions/workflow/status/R1NC/DynRS/CI-OHOS-Ubuntu.yml?branch=main&label=OHOS)](https://github.com/R1NC/DynRS/actions/workflows/CI-OHOS-Ubuntu.yml)
 [![WASM](https://img.shields.io/github/actions/workflow/status/R1NC/DynRS/CI-WASM-Ubuntu.yml?branch=main&label=WASM)](https://github.com/R1NC/DynRS/actions/workflows/CI-WASM-Ubuntu.yml)
