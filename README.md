@@ -2,7 +2,7 @@
 
 A cross-platform framework based on Rust, supporting biz dev via Lua & JS.
 
-> :point_right: The modern C++ version: [DynXX][1].
+> :point_right: The modern C++ counterpart: [DynXX][1].
 
 [<img src="https://img.shields.io/codecov/c/github/R1NC/DynRS/main?logo=codecov&label=Codecov"/>][11]
 [![API Docs & Test Reports](https://img.shields.io/badge/API_Docs_%26_Test_Reports-gray?logo=github)][4]
