@@ -8,8 +8,6 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.cargo/**'
-      # The build helper is one binary, so this host compiles all of it, but it only runs the WASM
-      # module: a change to another target's module is for that target's workflow.
       - 'xtask/**'
       - '!xtask/src/targets/android.rs'
       - '!xtask/src/targets/ios.rs'

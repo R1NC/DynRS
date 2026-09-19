@@ -9,9 +9,6 @@ on:
       - 'Cargo.lock'
       - '.cargo/**'
       - 'rust-toolchain.toml'
-      # The build helper is one binary, so this host compiles all of it, but it only runs `report`
-      # and `site`: a change to a target module is for that target's workflow, and `Common`
-      # type-checks them.
       - 'xtask/**'
       - '!xtask/src/targets/android.rs'
       - '!xtask/src/targets/ios.rs'
@@ -85,6 +82,15 @@ jobs:
       # helper runs it and renders the unit test report, and holds the coverage to a floor.
       - name: Test
         run: cargo xtask report --fail-under-lines 80
+
+      - name: Upload coverage to Codecov
+        if: github.ref == 'refs/heads/main'
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage/lcov.info
+          flags: linux
+          name: linux-ubuntu
+          token: ${{ secrets.CODECOV_TOKEN }}
 
       # What people download from a run: the release static library and the qjsc compiler.
       - name: Build release artifacts
