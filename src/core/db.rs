@@ -100,30 +100,56 @@ impl QueryResult {
     }
 }
 
+/// Why a column could not be read.
+///
+/// The readers used to return a bare `Option`, which folded four different answers into `None`: no
+/// such column, no value at that index, SQL `NULL`, and a value of another SQL type. `Ok(None)` now
+/// means only the last two — "there is nothing here" — and the first is an error.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum ColumnError {
+    /// The query did not select a column with this name.
+    NoSuchColumn,
+}
+
+impl std::fmt::Display for ColumnError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ColumnError::NoSuchColumn => f.write_str("the query has no such column"),
+        }
+    }
+}
+
+impl std::error::Error for ColumnError {}
+
 impl QueryResultRow {
-    fn get_value(&self, column: &str) -> Option<&Value> {
-        let idx = self.column_indices.get(column)?;
-        self.values.get(*idx)
+    fn get_value(&self, column: &str) -> Result<Option<&Value>, ColumnError> {
+        let index = self
+            .column_indices
+            .get(column)
+            .ok_or(ColumnError::NoSuchColumn)?;
+        Ok(self.values.get(*index))
     }
 
-    pub fn get_string(&self, column: &str) -> Option<String> {
+    /// The text of `column`. `Ok(None)` when the cell is `NULL` or holds another type, which is how
+    /// this reader has always treated a value it cannot present as text.
+    pub fn get_string(&self, column: &str) -> Result<Option<String>, ColumnError> {
         match self.get_value(column)? {
-            Value::Text(s) => Some(s.clone()),
-            _ => None,
+            Some(Value::Text(s)) => Ok(Some(s.clone())),
+            _ => Ok(None),
         }
     }
 
-    pub fn get_i64(&self, column: &str) -> Option<i64> {
+    pub fn get_i64(&self, column: &str) -> Result<Option<i64>, ColumnError> {
         match self.get_value(column)? {
-            Value::Integer(i) => Some(*i),
-            _ => None,
+            Some(Value::Integer(i)) => Ok(Some(*i)),
+            _ => Ok(None),
         }
     }
 
-    pub fn get_f64(&self, column: &str) -> Option<f64> {
+    pub fn get_f64(&self, column: &str) -> Result<Option<f64>, ColumnError> {
         match self.get_value(column)? {
-            Value::Real(f) => Some(*f),
-            _ => None,
+            Some(Value::Real(f)) => Ok(Some(*f)),
+            _ => Ok(None),
         }
     }
 }
@@ -179,9 +205,17 @@ mod tests {
         for (id, name, ratio) in [(1_i64, "one", 1.5_f64), (2, "two", 2.5), (3, "three", 3.5)] {
             assert!(result.next_row(), "{name} should be reachable");
             let row = result.current_row().expect("the advanced row is current");
-            assert_eq!(row.get_i64("id"), Some(id));
-            assert_eq!(row.get_string("name").as_deref(), Some(name));
-            assert_eq!(row.get_f64("ratio"), Some(ratio));
+            assert_eq!(row.get_i64("id").expect("the column exists"), Some(id));
+            assert_eq!(
+                row.get_string("name")
+                    .expect("the column exists")
+                    .as_deref(),
+                Some(name)
+            );
+            assert_eq!(
+                row.get_f64("ratio").expect("the column exists"),
+                Some(ratio)
+            );
         }
 
         assert!(!result.next_row(), "iteration stops after the last row");
@@ -197,15 +231,24 @@ mod tests {
         assert!(result.next_row());
 
         let row = result.current_row().expect("the advanced row is current");
-        // A column holding another type, an unknown column and a NULL all read as "no
-        // value", like DynXX's `readColumn`.
-        assert_eq!(row.get_string("id"), None);
-        assert_eq!(row.get_i64("name"), None);
-        assert_eq!(row.get_f64("id"), None);
-        assert_eq!(row.get_string("note"), None, "NULL has no value");
-        assert_eq!(row.get_string("not-a-column"), None);
-        assert_eq!(row.get_i64("not-a-column"), None);
-        assert_eq!(row.get_f64("not-a-column"), None);
+        // A column holding another type and a NULL both read as "no value", like DynXX's
+        // `readColumn`.
+        assert_eq!(row.get_string("id").expect("the column exists"), None);
+        assert_eq!(row.get_i64("name").expect("the column exists"), None);
+        assert_eq!(row.get_f64("id").expect("the column exists"), None);
+        assert_eq!(
+            row.get_string("note").expect("the column exists"),
+            None,
+            "NULL has no value"
+        );
+
+        // A column the query never selected is a different answer: the caller named it wrong.
+        assert_eq!(
+            row.get_string("not-a-column"),
+            Err(ColumnError::NoSuchColumn)
+        );
+        assert_eq!(row.get_i64("not-a-column"), Err(ColumnError::NoSuchColumn));
+        assert_eq!(row.get_f64("not-a-column"), Err(ColumnError::NoSuchColumn));
     }
 
     #[test]
@@ -237,7 +280,9 @@ mod tests {
         assert_eq!(
             result
                 .current_row()
-                .and_then(|row| row.get_string("name"))
+                .expect("the advanced row is current")
+                .get_string("name")
+                .expect("the column exists")
                 .as_deref(),
             Some("one")
         );

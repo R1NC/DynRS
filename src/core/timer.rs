@@ -27,20 +27,34 @@ impl Timers {
     }
 
     /// Schedules `callback` to run `delay_secs` from now and returns the handle for it. A delay
-    /// that is not a positive, finite number fires on the next poll.
+    /// that is not a positive, finite number fires on the next poll, and so does one too large to
+    /// be represented: neither may panic, because this runs from inside a script engine callback
+    /// where an escaping panic would abort the host.
     pub fn add(&mut self, delay_secs: f64, callback: &str) -> i32 {
         let delay = if delay_secs.is_finite() && delay_secs > 0.0 {
-            delay_secs
+            // A finite float can still overflow a `Duration` (1e308 does), and `from_secs_f64`
+            // panics on that rather than saturating.
+            Duration::try_from_secs_f64(delay_secs).unwrap_or(Duration::ZERO)
         } else {
-            0.0
+            Duration::ZERO
         };
 
         let handle = self.next_id;
-        self.next_id += 1;
+        // Wrapping rather than `+=`: an overflow panics in debug and would otherwise silently
+        // replace a pending timer in release. A handle is an opaque number the script hands back to
+        // `removeTimer`, so a wrap after 2^31 registrations is a curiosity rather than a failure —
+        // and the earlier comment here claimed handle 0 marked exhaustion, which it never did,
+        // because `i32::MAX.wrapping_add(1)` is `i32::MIN`.
+        self.next_id = self.next_id.wrapping_add(1);
+        // `Instant + Duration` panics when the sum is unrepresentable, which a delay near
+        // `Duration::MAX` reaches.
+        let end_time = Instant::now()
+            .checked_add(delay)
+            .unwrap_or_else(Instant::now);
         self.active.insert(
             handle,
             TimerEntry {
-                end_time: Instant::now() + Duration::from_secs_f64(delay),
+                end_time,
                 callback: callback.to_string(),
             },
         );
@@ -144,5 +158,44 @@ mod tests {
 
         drop(guard);
         assert!(lock_timers(&timers).is_ok());
+    }
+
+    /// A delay that is finite but cannot be represented as a `Duration` used to panic inside
+    /// `Duration::from_secs_f64`, and a delay just under the `Duration` ceiling used to panic in
+    /// `Instant + Duration`. Either one aborted the host, because `add` runs from inside a script
+    /// engine callback. `addTimer(1e308, "f")` is ordinary script input.
+    #[test]
+    fn an_unrepresentable_delay_fires_at_once_instead_of_panicking() {
+        let mut timers = Timers::new();
+
+        let overflow = timers.add(1e308, "overflowing");
+        assert_eq!(timers.poll(), ["overflowing"]);
+
+        let negative = timers.add(-1e308, "negative overflow");
+        assert_eq!(timers.poll(), ["negative overflow"]);
+        assert!(
+            !timers.remove(negative),
+            "a timer that already fired is gone"
+        );
+
+        let subnormal = timers.add(f64::MIN_POSITIVE, "subnormal");
+        assert_eq!(timers.poll(), ["subnormal"]);
+
+        assert_ne!(overflow, subnormal);
+    }
+
+    /// The delay is clamped rather than reported as a failure, so the handle is always usable and
+    /// the id space does not run into the `i32` overflow that `+= 1` would panic on in debug.
+    #[test]
+    fn the_id_space_wraps_instead_of_panicking() {
+        let mut timers = Timers::new();
+        timers.next_id = i32::MAX;
+
+        let last = timers.add(0.0, "last");
+        assert_eq!(last, i32::MAX);
+
+        let wrapped = timers.add(0.0, "wrapped");
+        assert_eq!(wrapped, i32::MIN);
+        assert_ne!(last, wrapped);
     }
 }

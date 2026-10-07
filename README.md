@@ -52,14 +52,58 @@ cargo xtask build --target wasm --release   # also: android, ohos, ios (each nee
 * `src/core/*` — behaviour of the portable layer, mirroring DynXX's gtest coverage.
 * `src/c/*` — ABI contract tests only: null arguments, empty results, ownership.
 
+## :left_right_arrow: The C ABI
+
+Every exported function has the same shape: it returns a status, writes its results through
+out-parameters, and never lets a panic reach the caller. A panic that escaped one of them would
+abort the host process, so it is caught at the boundary and reported as `Panicked` instead.
+
+### How a call reports what happened
+
+The status separates answers that used to be one value — `false`, `0`, a null pointer — and the
+out-parameters carry everything else:
+
+| Status | Meaning |
+| :-- | :-- |
+| `Ok` (0) | The call did what it says. |
+| `Empty` (1) | There was nothing to report, and that is not an error: no value under this key, no row is current, no body in this response. Kept apart from `Ok` so that a zero is never mistaken for data. |
+| `InvalidArgument` (2) | The input was rejected: a null string, text that is not UTF-8, an empty key, a column the query did not select, a port that does not fit. |
+| `InvalidHandle` (3) | The handle is null, or cannot answer yet — a result set before `ngenrs_db_next_row`. |
+| `Failed` (4) | The operation failed: the network, the store, the script engine. |
+| `Panicked` (5) | The body panicked: the host can tell "the library broke" from "my call was wrong". |
+
+An out-parameter is left untouched when the call is refused, so read it only after `Ok`, `Empty`,
+or the specific status you expect. A failure that has something to say beyond the status — a load
+error, an unreadable response body — writes it to an `err_out` C string that the caller releases
+with `ngenrs_free_cstr`.
+
 ### Memory ownership at the C ABI
 
-| Returned value | Release with |
+Which release function a result needs is decided by *which out-parameter* it arrived in, not by the
+call that returned it:
+
+| Result arrived as | Release with |
 | :-- | :-- |
-| Byte buffers: `ngenrs_crypto_rand`, AES / RSA / hash / base64 outputs | `ngenrs_free_bytes(ptr, len)` |
-| C strings: `ngenrs_crypto_rsa_gen_key`, `ngenrs_*_read_string`, `ngenrs_db_get_string`, `ngenrs_http_parse_rsp_body` | `ngenrs_free_cstr(ptr)` |
-| Handles: `ngenrs_*_open` / `_init` / `_query` | the matching `ngenrs_*_close` / `_release` / `_free_*` |
-| HTTP responses: `ngenrs_http_get` / `_post` / `_download` / `_upload` | `ngenrs_http_release_rsp(rsp)` |
+| A byte buffer plus a length: `out` / `len_out` on `ngenrs_crypto_*`, `ngenrs_db_get_string`, `ngenrs_kv_read_string`, `ngenrs_qjs_call_function`, `ngenrs_lua_call_function`, `ngenrs_http_parse_rsp_body`, `ngenrs_z_compress` / `_decompress` | `ngenrs_free_bytes(ptr)` |
+| A `*mut c_char`: `ngenrs_crypto_rsa_gen_key`'s `out`, any `err_out`, the entries of `ngenrs_http_parse_rsp_headers` | `ngenrs_free_cstr(ptr)` |
+| A key list: `ngenrs_kv_all_keys`'s `out` | `ngenrs_kv_free_keys(keys)` |
+| A handle: `ngenrs_*_open` / `_init` / `_query` | the matching `ngenrs_*_close` / `_release` / `_free_*` |
+| An HTTP response: `ngenrs_http_get` / `_post` / `_download` / `_upload` | `ngenrs_http_release_rsp(rsp)` |
+
+### Data is bytes, not C strings
+
+Everything that hands back *data* returns a buffer plus its length through an out-parameter. A value
+that is present but empty is a real allocation of length zero; "there is no value here" is
+`DynrsStatus::Empty` with no buffer written at all.
+
+The distinction matters because the data is not always text the library produced: a script may
+return a string with a NUL byte in it, a text column may hold one, and an HTTP body is arbitrary
+bytes. Report those as C strings and they are silently truncated to nothing, indistinguishable from
+"no value". Only strings this library writes itself — error messages, PEM text, header names and
+values — come back as C strings, and none of those can contain a NUL.
+
+`ngenrs_kv_all_keys` follows the same rule for its keys: each key is a buffer with a length, because
+a store key is a Rust `&str` that may itself contain a NUL, and a C string could not carry one.
 
 
 [1]: https://github.com/R1NC/DynXX

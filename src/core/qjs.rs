@@ -1,4 +1,4 @@
-use crate::c::util::{cstr_to_rust, ngenrs_free_cstr, rust_to_cstr};
+use crate::c::util::cstr_to_rust;
 use crate::core::timer::{Timers, lock_timers};
 #[cfg(target_pointer_width = "64")]
 use libquickjs_ng_sys::JSValueUnion;
@@ -27,13 +27,35 @@ static JS_CALLBACKS: OnceLock<Mutex<HashMap<i32, Arc<JsCallback>>>> = OnceLock::
 static NEXT_CALLBACK_ID: AtomicI32 = AtomicI32::new(1);
 
 fn js_callbacks() -> std::sync::MutexGuard<'static, HashMap<i32, Arc<JsCallback>>> {
-    JS_CALLBACKS
-        .get_or_init(|| Mutex::new(HashMap::new()))
+    // A callback that panicked until the registry was unlocked leaves the map perfectly usable, so
+    // the poison is stepped over rather than raised: panicking here would turn one bad callback
+    // into a panic on every later call.
+    let callbacks = JS_CALLBACKS.get_or_init(|| Mutex::new(HashMap::new()));
+    callbacks
         .lock()
-        .unwrap()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Locks a pointer cell of this bridge, stepping over a poison the same way [`js_callbacks`] does.
+macro_rules! lock_or_recover {
+    ($cell:expr) => {
+        $cell
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    };
 }
 
 /// The C function QuickJS invokes for every registered script function.
+///
+/// # Safety
+///
+/// Called by QuickJS, which is the only thing that may call it: `argv` points to `argc` values and
+/// `magic` has to be an id this module registered at FFI offset 7 of the `JSCFunctionEnum` table.
+///
+/// No panic may leave this function. It is called *from* C, so the unwinder would have to cross
+/// QuickJS's own frames, and QuickJS could not catch the result anyway; the body therefore runs
+/// inside `catch_unwind` and a panic becomes a thrown JS exception, the same shape as a callback
+/// that returned `Err`.
 unsafe extern "C" fn js_callback_trampoline(
     ctx: *mut JSContext,
     _this_val: JSValue,
@@ -41,31 +63,45 @@ unsafe extern "C" fn js_callback_trampoline(
     argv: *mut JSValue,
     magic: i32,
 ) -> JSValue {
-    unsafe {
-        let args = if argc > 0 {
-            std::slice::from_raw_parts(argv, argc as usize).to_vec()
-        } else {
-            Vec::new()
-        };
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+        move || -> Result<JSValue, String> {
+            let args = if argc > 0 {
+                unsafe { std::slice::from_raw_parts(argv, argc as usize) }.to_vec()
+            } else {
+                Vec::new()
+            };
 
-        // The registry lock is released before the callback runs, so a callback may register
-        // another function of its own.
-        let callback = js_callbacks().get(&magic).map(Arc::clone);
+            // The registry lock is released before the callback runs, so a callback may register
+            // another function of its own.
+            let callback = js_callbacks().get(&magic).map(Arc::clone);
 
-        let result = match callback {
-            Some(callback) => callback(ctx, args),
-            None => Err(format!("no JS callback is registered for id {magic}")),
-        };
-
-        match result {
-            Ok(value) => value,
-            Err(message) => {
-                let message = rust_to_cstr(message);
-                let thrown = JS_NewStringLen(ctx, message, libc::strlen(message));
-                ngenrs_free_cstr(message);
-                JS_Throw(ctx, thrown)
+            match callback {
+                Some(callback) => callback(ctx, args),
+                None => Err(format!("no JS callback is registered for id {magic}")),
             }
-        }
+        },
+    ));
+
+    let result = match outcome {
+        Ok(result) => result,
+        // The message is thrown into the script, where a developer can `try`/`catch` it, so the
+        // payload is worth keeping instead of being replaced by a fixed sentence.
+        Err(payload) => Err(format!(
+            "the JS callback panicked: {}",
+            crate::panic_message(&*payload)
+        )),
+    };
+
+    match result {
+        Ok(value) => value,
+        Err(message) => unsafe {
+            // Handed over by length rather than as a C string: a message with a NUL in it used to
+            // become a null pointer, which threw `undefined` instead of the reason.
+            JS_Throw(
+                ctx,
+                JS_NewStringLen(ctx, message.as_ptr().cast(), message.len() as libc::size_t),
+            )
+        },
     }
 }
 
@@ -241,10 +277,16 @@ impl JSBridge {
     }
 
     pub fn load_script_content(&self, script: &str, is_module: bool) -> Result<(), String> {
+        // Both conversions happen before the engine lock is taken, and the script one reports its
+        // failure: `ngenrs_qjs_load_script_file` reads a file, and a NUL byte inside a file is
+        // valid UTF-8, so this is reachable with ordinary input rather than only with a broken
+        // caller.
+        let cscript = CString::new(script)
+            .map_err(|_| "the script must not contain a NUL byte".to_string())?;
+        let filename = CString::new("script.js").expect("the literal has no interior NUL");
+
         unsafe {
-            let ctx = self.ctx.lock().unwrap();
-            let cscript = CString::new(script).unwrap();
-            let filename = CString::new("script.js").unwrap();
+            let ctx = lock_or_recover!(self.ctx);
 
             let eval_flags = if is_module {
                 libquickjs_ng_sys::JS_EVAL_TYPE_MODULE as i32
@@ -272,7 +314,7 @@ impl JSBridge {
 
     pub fn load_bytecode_content(&self, bytecode: &[u8]) -> Result<(), String> {
         unsafe {
-            let ctx = self.ctx.lock().unwrap();
+            let ctx = lock_or_recover!(self.ctx);
 
             let obj = libquickjs_ng_sys::JS_ReadObject(
                 *ctx,
@@ -293,7 +335,7 @@ impl JSBridge {
 
     pub fn call_function(&self, func_name: &str, arg: &str) -> Result<String, String> {
         unsafe {
-            let ctx = self.ctx.lock().unwrap();
+            let ctx = lock_or_recover!(self.ctx);
             let global = JS_GetGlobalObject(*ctx);
 
             let cname = CString::new(func_name).unwrap();
@@ -342,7 +384,7 @@ impl JSBridge {
         F: Fn(*mut JSContext, Vec<JSValue>) -> Result<JSValue, String> + Send + Sync + 'static,
     {
         unsafe {
-            let ctx = self.ctx.lock().unwrap();
+            let ctx = lock_or_recover!(self.ctx);
             let global = JS_GetGlobalObject(*ctx);
             let cname = CString::new(name).map_err(|e| e.to_string())?;
 
@@ -402,11 +444,22 @@ impl JSBridge {
 
 impl Drop for JSBridge {
     fn drop(&mut self) {
-        unsafe {
-            let ctx = self.ctx.lock().unwrap();
-            let rt = self.rt.lock().unwrap();
-            libquickjs_ng_sys::JS_FreeContext(*ctx);
-            libquickjs_ng_sys::JS_FreeRuntime(*rt);
+        // A destructor must not panic: a panic raised while another panic is unwinding aborts the
+        // process outright, and `ngenrs_qjs_release` reaches this destructor from the C ABI. A
+        // poisoned lock is therefore stepped over, and an engine whose lock another thread still
+        // holds is leaked rather than killed — the cheaper of the two failures for a host.
+        if let Ok(mut ctx) = self.ctx.try_lock() {
+            unsafe {
+                libquickjs_ng_sys::JS_FreeContext(*ctx);
+            }
+            *ctx = std::ptr::null_mut();
+        }
+        if let Ok(mut rt) = self.rt.try_lock() {
+            // QuickJS requires the context to be gone before its runtime.
+            unsafe {
+                libquickjs_ng_sys::JS_FreeRuntime(*rt);
+            }
+            *rt = std::ptr::null_mut();
         }
     }
 }

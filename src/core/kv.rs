@@ -4,8 +4,9 @@
 #![allow(clippy::result_large_err)]
 
 use redb::{
-    Database, Error, Key, ReadOnlyTable, ReadTransaction, ReadableDatabase, ReadableTable,
-    StorageError, TableDefinition, TableError, Value,
+    CommitError, Database, DatabaseError, Error, Key, ReadOnlyTable, ReadTransaction,
+    ReadableDatabase, ReadableTable, StorageError, TableDefinition, TableError, TransactionError,
+    Value,
 };
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -15,12 +16,64 @@ const INT_TABLE: TableDefinition<&str, i64> = TableDefinition::new("integers");
 const FLOAT_TABLE: TableDefinition<&str, f64> = TableDefinition::new("floats");
 const STRING_TABLE: TableDefinition<&str, &str> = TableDefinition::new("strings");
 
-/// Opens a table for reading, mapping "never written to" onto `None` so that a missing table reads
-/// like a missing key instead of failing.
+/// Why a store operation was refused or failed.
+///
+/// Rejecting an empty key used to travel as `redb::Error::StorageError(Io(InvalidInput))`, which the
+/// C layer could only classify by matching on a string, and `contains`/`remove` answered the same
+/// invalid argument with `Ok(false)` — so "you gave me nothing to look up" and "no such key" were
+/// the same answer.
+#[derive(Debug)]
+pub enum KvError {
+    /// The key was empty.
+    EmptyKey,
+    /// The store failed. The `redb` error is kept for the message rather than classified.
+    Store(Error),
+}
+
+impl std::fmt::Display for KvError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            KvError::EmptyKey => f.write_str("the key must not be empty"),
+            KvError::Store(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for KvError {}
+
+impl From<Error> for KvError {
+    fn from(error: Error) -> Self {
+        KvError::Store(error)
+    }
+}
+
+/// The errors `redb` raises from its own API; each means "the store failed" as far as a caller of
+/// this module is concerned, so they all fold into [`KvError::Store`].
+macro_rules! kv_error_from {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl From<$ty> for KvError {
+                fn from(error: $ty) -> Self {
+                    KvError::Store(error.into())
+                }
+            }
+        )+
+    };
+}
+
+kv_error_from!(
+    DatabaseError,
+    TransactionError,
+    CommitError,
+    TableError,
+    StorageError,
+    std::io::Error
+);
+
 fn open_table_for_read<K, V>(
     txn: &ReadTransaction,
     definition: TableDefinition<K, V>,
-) -> Result<Option<ReadOnlyTable<K, V>>, Error>
+) -> Result<Option<ReadOnlyTable<K, V>>, KvError>
 where
     K: Key + 'static,
     V: Value + 'static,
@@ -42,15 +95,10 @@ macro_rules! table_contains {
     };
 }
 
-/// Rejects an empty key before the store is touched, the way DynXX does. The public signatures stay
-/// `Result<_, redb::Error>`, so the rule travels as an invalid-input error from that type.
-fn check_key(key: &str) -> Result<(), Error> {
+/// Rejects an empty key before the store is touched, the way DynXX does.
+fn check_key(key: &str) -> Result<(), KvError> {
     if key.is_empty() {
-        return Err(StorageError::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "the key must not be empty",
-        ))
-        .into());
+        return Err(KvError::EmptyKey);
     }
     Ok(())
 }
@@ -60,12 +108,12 @@ pub struct KV {
 }
 
 impl KV {
-    pub fn open(path: impl AsRef<Path>) -> Result<Self, Error> {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, KvError> {
         let db = Database::create(path)?;
         Ok(Self { db })
     }
 
-    pub fn write_int(&self, key: &str, value: i64) -> Result<(), Error> {
+    pub fn write_int(&self, key: &str, value: i64) -> Result<(), KvError> {
         check_key(key)?;
         let write_txn = self.db.begin_write()?;
         {
@@ -76,11 +124,8 @@ impl KV {
         Ok(())
     }
 
-    pub fn read_int(&self, key: &str) -> Result<Option<i64>, Error> {
-        // An empty key reads as "no value", like DynXX, rather than as a failure.
-        if key.is_empty() {
-            return Ok(None);
-        }
+    pub fn read_int(&self, key: &str) -> Result<Option<i64>, KvError> {
+        check_key(key)?;
         let read_txn = self.db.begin_read()?;
         match open_table_for_read(&read_txn, INT_TABLE)? {
             Some(table) => Ok(table.get(key)?.map(|value| value.value())),
@@ -88,7 +133,7 @@ impl KV {
         }
     }
 
-    pub fn write_float(&self, key: &str, value: f64) -> Result<(), Error> {
+    pub fn write_float(&self, key: &str, value: f64) -> Result<(), KvError> {
         check_key(key)?;
         let write_txn = self.db.begin_write()?;
         {
@@ -99,10 +144,8 @@ impl KV {
         Ok(())
     }
 
-    pub fn read_float(&self, key: &str) -> Result<Option<f64>, Error> {
-        if key.is_empty() {
-            return Ok(None);
-        }
+    pub fn read_float(&self, key: &str) -> Result<Option<f64>, KvError> {
+        check_key(key)?;
         let read_txn = self.db.begin_read()?;
         match open_table_for_read(&read_txn, FLOAT_TABLE)? {
             Some(table) => Ok(table.get(key)?.map(|value| value.value())),
@@ -110,7 +153,7 @@ impl KV {
         }
     }
 
-    pub fn write_string(&self, key: &str, value: &str) -> Result<(), Error> {
+    pub fn write_string(&self, key: &str, value: &str) -> Result<(), KvError> {
         check_key(key)?;
         let write_txn = self.db.begin_write()?;
         {
@@ -121,10 +164,8 @@ impl KV {
         Ok(())
     }
 
-    pub fn read_string(&self, key: &str) -> Result<Option<String>, Error> {
-        if key.is_empty() {
-            return Ok(None);
-        }
+    pub fn read_string(&self, key: &str) -> Result<Option<String>, KvError> {
+        check_key(key)?;
         let read_txn = self.db.begin_read()?;
         match open_table_for_read(&read_txn, STRING_TABLE)? {
             Some(table) => Ok(table.get(key)?.map(|value| value.value().to_string())),
@@ -133,11 +174,8 @@ impl KV {
     }
 
     /// Mirrors `dynxxKVContains`: the key exists when any of the typed tables holds it.
-    pub fn contains(&self, key: &str) -> Result<bool, Error> {
-        if key.is_empty() {
-            return Ok(false);
-        }
-
+    pub fn contains(&self, key: &str) -> Result<bool, KvError> {
+        check_key(key)?;
         let read_txn = self.db.begin_read()?;
         // One store key can sit in more than one table, so every table has to be checked.
         Ok(table_contains!(&read_txn, INT_TABLE, key)
@@ -147,11 +185,8 @@ impl KV {
 
     /// Mirrors `dynxxKVRemove`: drops the key from every typed table and reports whether it was
     /// there at all.
-    pub fn remove(&self, key: &str) -> Result<bool, Error> {
-        if key.is_empty() {
-            return Ok(false);
-        }
-
+    pub fn remove(&self, key: &str) -> Result<bool, KvError> {
+        check_key(key)?;
         let write_txn = self.db.begin_write()?;
         let mut removed = false;
         {
@@ -172,7 +207,7 @@ impl KV {
 
     /// Mirrors `dynxxKVAllKeys`: every key name once, sorted so that the order is deterministic
     /// (MMKV's own order is not).
-    pub fn all_keys(&self) -> Result<Vec<String>, Error> {
+    pub fn all_keys(&self) -> Result<Vec<String>, KvError> {
         let read_txn = self.db.begin_read()?;
         let mut keys = BTreeSet::new();
 
@@ -199,7 +234,7 @@ impl KV {
     }
 
     /// Mirrors `dynxxKVClear`: empties every typed table.
-    pub fn clear(&self) -> Result<(), Error> {
+    pub fn clear(&self) -> Result<(), KvError> {
         let write_txn = self.db.begin_write()?;
         {
             let mut table = write_txn.open_table(INT_TABLE)?;
@@ -468,19 +503,20 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_key_is_refused_like_dynxx() {
+    fn an_empty_key_is_refused_the_same_way_everywhere() {
         let file = TempDbFile::new("empty_key");
         let kv = KV::open(&file.path).expect("store opens");
 
-        // Writes fail, reads answer "no value", and the key is never present.
-        assert!(kv.write_int("", 1).is_err());
-        assert!(kv.write_float("", 1.5).is_err());
-        assert!(kv.write_string("", "v").is_err());
-        assert_eq!(kv.read_int("").expect("int is read"), None);
-        assert_eq!(kv.read_float("").expect("float is read"), None);
-        assert_eq!(kv.read_string("").expect("string is read"), None);
-        assert!(!kv.contains("").expect("contains answers"));
-        assert!(!kv.remove("").expect("remove answers"));
+        // An empty key can never be stored, so it is the same invalid argument for every operation
+        // rather than a failure for writes and an innocuous "no" for the lookups.
+        assert!(matches!(kv.write_int("", 1), Err(KvError::EmptyKey)));
+        assert!(matches!(kv.write_float("", 1.5), Err(KvError::EmptyKey)));
+        assert!(matches!(kv.write_string("", "v"), Err(KvError::EmptyKey)));
+        assert!(matches!(kv.read_int(""), Err(KvError::EmptyKey)));
+        assert!(matches!(kv.read_float(""), Err(KvError::EmptyKey)));
+        assert!(matches!(kv.read_string(""), Err(KvError::EmptyKey)));
+        assert!(matches!(kv.contains(""), Err(KvError::EmptyKey)));
+        assert!(matches!(kv.remove(""), Err(KvError::EmptyKey)));
         assert!(kv.all_keys().expect("keys are listed").is_empty());
     }
 }

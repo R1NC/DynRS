@@ -92,6 +92,38 @@ pub fn bytes2hex(bytes: &[u8]) -> String {
     hex::encode(bytes)
 }
 
+/// Why a crypto operation did not produce a result.
+///
+/// This exists so that the portable layer never has to say "the arguments were refused" with an
+/// empty `Vec`: an empty result is a result, and a caller that cannot tell the two apart cannot
+/// report either one honestly.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum CryptoError {
+    /// The input was empty, or the key/nonce/tag parameters are outside what the operation accepts.
+    InvalidArgument,
+    /// A PEM key could not be parsed.
+    InvalidKey,
+    /// The operation ran and failed: PKCS7 padding that does not verify, a GCM tag that does not
+    /// match, a payload that does not fit the key.
+    OperationFailed,
+    /// The requested output could not be allocated.
+    OutOfMemory,
+}
+
+impl std::fmt::Display for CryptoError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let text = match self {
+            CryptoError::InvalidArgument => "an argument is out of range",
+            CryptoError::InvalidKey => "the key could not be read",
+            CryptoError::OperationFailed => "the operation failed",
+            CryptoError::OutOfMemory => "the result could not be allocated",
+        };
+        f.write_str(text)
+    }
+}
+
+impl Error for CryptoError {}
+
 /// Mirrors `checkAesParams` in `Crypto-OpenSSL.cxx`:
 /// input must be non-empty, key length a multiple of 8 within `16..=32`.
 fn check_aes_params(input: &[u8], key: &[u8]) -> bool {
@@ -99,9 +131,9 @@ fn check_aes_params(input: &[u8], key: &[u8]) -> bool {
 }
 
 /// AES-ECB + PKCS7, mirroring DynXX `Core::Crypto::AES::encrypt`.
-pub fn aes_encrypt(input: &[u8], key: &[u8]) -> Vec<u8> {
+pub fn aes_encrypt(input: &[u8], key: &[u8]) -> Result<Vec<u8>, CryptoError> {
     if !check_aes_params(input, key) {
-        return Vec::new();
+        return Err(CryptoError::InvalidArgument);
     }
     let encrypted = match key.len() {
         16 => Encryptor::<aes::Aes128>::new_from_slice(key)
@@ -110,15 +142,15 @@ pub fn aes_encrypt(input: &[u8], key: &[u8]) -> Vec<u8> {
             .map(|cipher| cipher.encrypt_padded_vec::<Pkcs7>(input)),
         32 => Encryptor::<aes::Aes256>::new_from_slice(key)
             .map(|cipher| cipher.encrypt_padded_vec::<Pkcs7>(input)),
-        _ => return Vec::new(),
+        _ => return Err(CryptoError::InvalidArgument),
     };
-    encrypted.unwrap_or_default()
+    encrypted.map_err(|_| CryptoError::OperationFailed)
 }
 
 /// AES-ECB + PKCS7, mirroring DynXX `Core::Crypto::AES::decrypt`.
-pub fn aes_decrypt(input: &[u8], key: &[u8]) -> Vec<u8> {
+pub fn aes_decrypt(input: &[u8], key: &[u8]) -> Result<Vec<u8>, CryptoError> {
     if !check_aes_params(input, key) {
-        return Vec::new();
+        return Err(CryptoError::InvalidArgument);
     }
     let decrypted = match key.len() {
         16 => Decryptor::<aes::Aes128>::new_from_slice(key)
@@ -130,9 +162,9 @@ pub fn aes_decrypt(input: &[u8], key: &[u8]) -> Vec<u8> {
         32 => Decryptor::<aes::Aes256>::new_from_slice(key)
             .ok()
             .and_then(|cipher| cipher.decrypt_padded_vec::<Pkcs7>(input).ok()),
-        _ => None,
+        _ => return Err(CryptoError::InvalidArgument),
     };
-    decrypted.unwrap_or_default()
+    decrypted.ok_or(CryptoError::OperationFailed)
 }
 
 /// Mirrors `checkAesGcmParams`: IV exactly 12 bytes, AAD at most 16 bytes,
@@ -159,12 +191,12 @@ pub fn aes_gcm_encrypt(
     init_vector: &[u8],
     aad: &[u8],
     tag_bits: usize,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, CryptoError> {
     if !check_aes_gcm_params(input, key, init_vector, aad, tag_bits) {
-        return Vec::new();
+        return Err(CryptoError::InvalidArgument);
     }
     let Ok(nonce) = aes_gcm::Nonce::<U12>::try_from(init_vector) else {
-        return Vec::new();
+        return Err(CryptoError::InvalidArgument);
     };
     let mut buffer = input.to_vec();
     let tag = match key.len() {
@@ -176,31 +208,32 @@ pub fn aes_gcm_encrypt(
     match tag {
         Some(tag) => {
             buffer.extend_from_slice(&tag);
-            buffer
+            Ok(buffer)
         }
-        None => Vec::new(),
+        None => Err(CryptoError::OperationFailed),
     }
 }
 
 /// AES-GCM decrypt; the tag is expected at the tail of `input`, mirroring
-/// DynXX `Core::Crypto::AES::gcmDecrypt`.
+/// DynXX `Core::Crypto::AES::gcmDecrypt`. A tag that does not verify is [`CryptoError::OperationFailed`],
+/// not an empty result.
 pub fn aes_gcm_decrypt(
     input: &[u8],
     key: &[u8],
     init_vector: &[u8],
     aad: &[u8],
     tag_bits: usize,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, CryptoError> {
     if !check_aes_gcm_params(input, key, init_vector, aad, tag_bits) {
-        return Vec::new();
+        return Err(CryptoError::InvalidArgument);
     }
     let tag_len = tag_bits / 8;
     if input.len() < tag_len {
-        return Vec::new();
+        return Err(CryptoError::InvalidArgument);
     }
     let (cipher_text, tag_bytes) = input.split_at(input.len() - tag_len);
     let Ok(nonce) = aes_gcm::Nonce::<U12>::try_from(init_vector) else {
-        return Vec::new();
+        return Err(CryptoError::InvalidArgument);
     };
     let mut buffer = cipher_text.to_vec();
     let ok = match key.len() {
@@ -209,7 +242,11 @@ pub fn aes_gcm_decrypt(
         32 => gcm_verify_for_key!(Aes256Gcm, key, &nonce, aad, tag_bits, tag_bytes, buffer),
         _ => false,
     };
-    if ok { buffer } else { Vec::new() }
+    if ok {
+        Ok(buffer)
+    } else {
+        Err(CryptoError::OperationFailed)
+    }
 }
 
 /// Mirrors `DynXXCryptoRSAPadding`: the discriminants are OpenSSL's `RSA_*_PADDING` values, which
@@ -256,49 +293,47 @@ fn rsa_private_key_from_pem(key: &[u8]) -> Option<RsaPrivateKey> {
 }
 
 /// Mirrors DynXX `Core::Crypto::RSA::encrypt`; the key is a PEM public key.
-pub fn rsa_encrypt(input: &[u8], key: &[u8], padding: i32) -> Vec<u8> {
+pub fn rsa_encrypt(input: &[u8], key: &[u8], padding: i32) -> Result<Vec<u8>, CryptoError> {
     if input.is_empty() || key.is_empty() {
-        return Vec::new();
+        return Err(CryptoError::InvalidArgument);
     }
     let Some(public_key) = rsa_public_key_from_pem(key) else {
-        return Vec::new();
+        return Err(CryptoError::InvalidKey);
     };
     let mut rng = OsRng;
     match RsaPadding::from(padding) {
         RsaPadding::Pkcs1 => public_key
             .encrypt(&mut rng, Pkcs1v15Encrypt, input)
-            .unwrap_or_default(),
+            .map_err(|_| CryptoError::OperationFailed),
         RsaPadding::Oaep => public_key
             .encrypt(&mut rng, Oaep::new::<Sha1>(), input)
-            .unwrap_or_default(),
-        _ => Vec::new(),
+            .map_err(|_| CryptoError::OperationFailed),
+        // The paddings OpenSSL 3.x does not offer for encryption.
+        _ => Err(CryptoError::InvalidArgument),
     }
 }
 
 /// Mirrors DynXX `Core::Crypto::RSA::decrypt`; the key is a PEM private key.
-pub fn rsa_decrypt(input: &[u8], key: &[u8], padding: i32) -> Vec<u8> {
+pub fn rsa_decrypt(input: &[u8], key: &[u8], padding: i32) -> Result<Vec<u8>, CryptoError> {
     if input.is_empty() || key.is_empty() {
-        return Vec::new();
+        return Err(CryptoError::InvalidArgument);
     }
     let Some(private_key) = rsa_private_key_from_pem(key) else {
-        return Vec::new();
+        return Err(CryptoError::InvalidKey);
     };
     match RsaPadding::from(padding) {
         RsaPadding::Pkcs1 => private_key
             .decrypt(Pkcs1v15Encrypt, input)
-            .unwrap_or_default(),
+            .map_err(|_| CryptoError::OperationFailed),
         RsaPadding::Oaep => private_key
             .decrypt(Oaep::new::<Sha1>(), input)
-            .unwrap_or_default(),
-        _ => Vec::new(),
+            .map_err(|_| CryptoError::OperationFailed),
+        _ => Err(CryptoError::InvalidArgument),
     }
 }
 
-/// Mirrors DynXX `evpHash`: empty input yields empty output.
+/// Mirrors DynXX `evpHash`.
 pub fn hash<D: Digest>(data: &[u8]) -> Vec<u8> {
-    if data.is_empty() {
-        return Vec::new();
-    }
     let mut hasher = D::new();
     hasher.update(data);
     hasher.finalize().to_vec()
@@ -316,14 +351,21 @@ pub fn hash_sha256(data: &[u8]) -> Vec<u8> {
     hash::<Sha256>(data)
 }
 
-/// Mirrors DynXX `Core::Crypto::rand` (OpenSSL `RAND_bytes`).
-pub fn rand(len: usize) -> Vec<u8> {
+/// Mirrors DynXX `Core::Crypto::rand` (OpenSSL `RAND_bytes`). A length of zero is an empty request
+/// rather than a failure; a length that cannot be allocated is [`CryptoError::OutOfMemory`].
+pub fn rand(len: usize) -> Result<Vec<u8>, CryptoError> {
     if len == 0 {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    let mut out = vec![0u8; len];
+    // `vec![0u8; len]` panics with "capacity overflow" for a length above `isize::MAX`, and that
+    // panic would run from inside a C ABI entry point, so the allocation is asked for fallibly.
+    let mut out = Vec::new();
+    if out.try_reserve_exact(len).is_err() {
+        return Err(CryptoError::OutOfMemory);
+    }
+    out.resize(len, 0);
     rand::rng().fill(&mut out);
-    out
+    Ok(out)
 }
 
 /// Mirrors DynXX `Base64::validate`: non-empty, length a multiple of 4 and every
@@ -354,10 +396,11 @@ pub fn base64_encode(data: &[u8], no_new_lines: bool) -> Vec<u8> {
     out
 }
 
-/// Mirrors DynXX `Base64::decode(in, noNewLines)`.
-pub fn base64_decode(data: &[u8], no_new_lines: bool) -> Vec<u8> {
+/// Mirrors DynXX `Base64::decode(in, noNewLines)`. Input that is not base64 is
+/// [`CryptoError::InvalidArgument`] rather than an empty result.
+pub fn base64_decode(data: &[u8], no_new_lines: bool) -> Result<Vec<u8>, CryptoError> {
     if data.is_empty() {
-        return Vec::new();
+        return Err(CryptoError::InvalidArgument);
     }
     let raw: Vec<u8> = if no_new_lines {
         data.to_vec()
@@ -368,20 +411,24 @@ pub fn base64_decode(data: &[u8], no_new_lines: bool) -> Vec<u8> {
             .collect()
     };
     let Ok(s) = std::str::from_utf8(&raw) else {
-        return Vec::new();
+        return Err(CryptoError::InvalidArgument);
     };
     if !base64_validate(s) {
-        return Vec::new();
+        return Err(CryptoError::InvalidArgument);
     }
-    general_purpose::STANDARD.decode(s).unwrap_or_default()
+    general_purpose::STANDARD
+        .decode(s)
+        .map_err(|_| CryptoError::InvalidArgument)
 }
 
 /// Mirrors DynXX `Core::Crypto::RSA::genKey`: wraps a base64 DER blob into PEM text
 /// with 64-character lines. Despite the name it does not generate a key pair.
-pub fn rsa_gen_key(base64: &str, is_public: bool) -> String {
+/// Mirrors DynXX's PEM wrapper. Base64 that does not validate is
+/// [`CryptoError::InvalidArgument`] rather than an empty string.
+pub fn rsa_gen_key(base64: &str, is_public: bool) -> Result<String, CryptoError> {
     let cleaned: String = base64.split_whitespace().collect();
     if !base64_validate(&cleaned) {
-        return String::new();
+        return Err(CryptoError::InvalidArgument);
     }
     let label = if is_public { "PUBLIC" } else { "PRIVATE" };
     let mut pem = String::with_capacity(cleaned.len() + cleaned.len() / 64 + 64);
@@ -395,7 +442,7 @@ pub fn rsa_gen_key(base64: &str, is_public: bool) -> String {
     pem.push_str("-----END ");
     pem.push_str(label);
     pem.push_str(" KEY-----\n");
-    pem
+    Ok(pem)
 }
 
 #[cfg(test)]
@@ -412,11 +459,11 @@ mod tests {
         let expected_cipher = hex::decode("0388dace60b6a392f328c2b971b2fe78").unwrap();
         let expected_tag = hex::decode("ab6e47d42cec13bdf53a67b21257bddf").unwrap();
 
-        let out = aes_gcm_encrypt(&plain, &key, &iv, &[], 128);
+        let out = aes_gcm_encrypt(&plain, &key, &iv, &[], 128).expect("128-bit GCM encrypts");
         assert_eq!(&out[..16], &expected_cipher[..]);
         assert_eq!(&out[16..], &expected_tag[..]);
 
-        let back = aes_gcm_decrypt(&out, &key, &iv, &[], 128);
+        let back = aes_gcm_decrypt(&out, &key, &iv, &[], 128).expect("the tag verifies");
         assert_eq!(back, plain.to_vec());
     }
 
@@ -428,17 +475,22 @@ mod tests {
             for tag_bits in [96, 104, 112, 120, 128] {
                 let key = vec![0x11u8; key_len];
                 let iv = vec![0x22u8; 12];
-                let enc = aes_gcm_encrypt(plain, &key, &iv, aad, tag_bits);
+                let enc = aes_gcm_encrypt(plain, &key, &iv, aad, tag_bits)
+                    .expect("a valid tag size encrypts");
                 assert_eq!(enc.len(), plain.len() + tag_bits / 8);
                 assert_eq!(
-                    aes_gcm_decrypt(&enc, &key, &iv, aad, tag_bits),
+                    aes_gcm_decrypt(&enc, &key, &iv, aad, tag_bits).expect("the tag verifies"),
                     plain.to_vec()
                 );
                 // A tampered tag must not decrypt.
                 let mut bad = enc.clone();
                 let last = bad.len() - 1;
                 bad[last] ^= 0xFF;
-                assert!(aes_gcm_decrypt(&bad, &key, &iv, aad, tag_bits).is_empty());
+                assert_eq!(
+                    aes_gcm_decrypt(&bad, &key, &iv, aad, tag_bits),
+                    Err(CryptoError::OperationFailed),
+                    "a tag that does not verify is a failure, not an empty result"
+                );
             }
         }
     }
@@ -447,11 +499,14 @@ mod tests {
     fn aes_ecb_pkcs7_matches_known_block() {
         let key = [0u8; 16];
         let plain = [0u8; 16];
-        let out = aes_encrypt(&plain, &key);
+        let out = aes_encrypt(&plain, &key).expect("a 16 byte key encrypts");
         // PKCS7 always adds a full padding block here, so the output is two blocks long.
         assert_eq!(out.len(), 32);
         assert_eq!(hex::encode(&out[..16]), "66e94bd4ef8a2c3b884cfa59ca342b2e");
-        assert_eq!(aes_decrypt(&out, &key), plain.to_vec());
+        assert_eq!(
+            aes_decrypt(&out, &key).expect("the padding verifies"),
+            plain.to_vec()
+        );
     }
 
     /// FIPS-197 appendix C: the sample plaintext under the sample key of each size DynXX accepts,
@@ -468,7 +523,7 @@ mod tests {
 
         for (key_len, expected) in vectors {
             let key: Vec<u8> = (0..key_len as u8).collect();
-            let out = aes_encrypt(&plain, &key);
+            let out = aes_encrypt(&plain, &key).expect("a valid key size encrypts");
             // PKCS7 adds a full block, so the first block is the vector and the second the padding.
             assert_eq!(out.len(), 32, "a key of {key_len} bytes");
             assert_eq!(
@@ -476,34 +531,75 @@ mod tests {
                 expected,
                 "a key of {key_len} bytes"
             );
-            assert_eq!(aes_decrypt(&out, &key), plain, "a key of {key_len} bytes");
+            assert_eq!(
+                aes_decrypt(&out, &key).expect("the padding verifies"),
+                plain,
+                "a key of {key_len} bytes"
+            );
         }
     }
 
-    /// Inputs that the parameter checks refuse, which is where each of these ends in nothing.
+    /// Inputs that the parameter checks refuse. Each one is now an explicit error rather than an
+    /// empty result, which is what lets a caller tell "refused" from "produced nothing".
     #[test]
-    fn inputs_that_the_checks_refuse_yield_nothing() {
+    fn inputs_that_the_checks_refuse_are_errors() {
         // AES-ECB: nothing to decrypt, and a key length that is not 16, 24 or 32.
-        assert!(aes_decrypt(&[], &[0u8; 16]).is_empty());
-        assert!(aes_decrypt(&[0u8; 16], &[0u8; 8]).is_empty());
+        assert_eq!(
+            aes_decrypt(&[], &[0u8; 16]),
+            Err(CryptoError::InvalidArgument)
+        );
+        assert_eq!(
+            aes_decrypt(&[0u8; 16], &[0u8; 8]),
+            Err(CryptoError::InvalidArgument)
+        );
 
         // AES-GCM: an IV that is not 12 bytes, a tag size outside 96..=128, and a ciphertext that
         // is shorter than the tag it is supposed to carry.
-        assert!(aes_gcm_encrypt(b"x", &[0u8; 16], &[0u8; 11], &[], 128).is_empty());
-        assert!(aes_gcm_encrypt(b"x", &[0u8; 16], &[0u8; 12], &[], 64).is_empty());
-        assert!(aes_gcm_decrypt(&[0u8; 4], &[0u8; 16], &[0u8; 12], &[], 128).is_empty());
+        assert_eq!(
+            aes_gcm_encrypt(b"x", &[0u8; 16], &[0u8; 11], &[], 128),
+            Err(CryptoError::InvalidArgument)
+        );
+        assert_eq!(
+            aes_gcm_encrypt(b"x", &[0u8; 16], &[0u8; 12], &[], 64),
+            Err(CryptoError::InvalidArgument)
+        );
+        assert_eq!(
+            aes_gcm_decrypt(&[0u8; 4], &[0u8; 16], &[0u8; 12], &[], 128),
+            Err(CryptoError::InvalidArgument)
+        );
 
         // RSA: nothing to encrypt, nothing to encrypt with, and a key that is not a PEM.
-        assert!(rsa_encrypt(&[], b"key", 1).is_empty());
-        assert!(rsa_encrypt(b"data", &[], 1).is_empty());
-        assert!(rsa_encrypt(b"data", b"not a pem", 1).is_empty());
-        assert!(rsa_decrypt(&[], b"key", 1).is_empty());
-        assert!(rsa_decrypt(b"data", b"not a pem", 1).is_empty());
+        assert_eq!(
+            rsa_encrypt(&[], b"key", 1),
+            Err(CryptoError::InvalidArgument)
+        );
+        assert_eq!(
+            rsa_encrypt(b"data", &[], 1),
+            Err(CryptoError::InvalidArgument)
+        );
+        assert_eq!(
+            rsa_encrypt(b"data", b"not a pem", 1),
+            Err(CryptoError::InvalidKey)
+        );
+        assert_eq!(
+            rsa_decrypt(&[], b"key", 1),
+            Err(CryptoError::InvalidArgument)
+        );
+        assert_eq!(
+            rsa_decrypt(b"data", b"not a pem", 1),
+            Err(CryptoError::InvalidKey)
+        );
 
         // Base64: nothing to decode, bytes that are not text, and text that is not base64.
-        assert!(base64_decode(&[], true).is_empty());
-        assert!(base64_decode(&[0xff, 0xfe, 0xfd, 0xfc], true).is_empty());
-        assert!(base64_decode(b"not base64!!", true).is_empty());
+        assert_eq!(base64_decode(&[], true), Err(CryptoError::InvalidArgument));
+        assert_eq!(
+            base64_decode(&[0xff, 0xfe, 0xfd, 0xfc], true),
+            Err(CryptoError::InvalidArgument)
+        );
+        assert_eq!(
+            base64_decode(b"not base64!!", true),
+            Err(CryptoError::InvalidArgument)
+        );
     }
 
     #[test]
@@ -511,29 +607,43 @@ mod tests {
         let data = vec![0x41u8; 100];
         let flat = base64_encode(&data, true);
         assert!(!flat.contains(&b'\n'));
-        assert_eq!(base64_decode(&flat, true), data);
+        assert_eq!(base64_decode(&flat, true).expect("valid base64"), data);
 
         let wrapped = base64_encode(&data, false);
         assert!(wrapped.contains(&b'\n'));
-        assert_eq!(base64_decode(&wrapped, false), data);
+        assert_eq!(base64_decode(&wrapped, false).expect("valid base64"), data);
     }
 
     #[test]
     fn rsa_gen_key_wraps_base64_into_pem() {
         let body = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A";
-        let pem = rsa_gen_key(body, true);
+        let pem = rsa_gen_key(body, true).expect("valid base64 becomes PEM");
         assert!(pem.starts_with("-----BEGIN PUBLIC KEY-----\n"));
         assert!(pem.trim_end().ends_with("-----END PUBLIC KEY-----"));
-        assert!(rsa_gen_key("not base64!!", true).is_empty());
+        assert_eq!(
+            rsa_gen_key("not base64!!", true),
+            Err(CryptoError::InvalidArgument)
+        );
     }
 
     #[test]
-    fn empty_input_yields_empty_output() {
-        assert!(hash_md5(&[]).is_empty());
-        assert!(aes_encrypt(&[], &[0u8; 16]).is_empty());
+    fn empty_inputs_are_handled_by_each_operation_on_its_own_terms() {
+        // A digest of nothing is a digest: the operation ran and has a full-length answer.
+        assert_eq!(hash_md5(&[]).len(), 16);
+
+        // A cipher refuses an empty input, and now says so instead of returning nothing.
+        assert_eq!(
+            aes_encrypt(&[], &[0u8; 16]),
+            Err(CryptoError::InvalidArgument),
+            "AES refuses an empty input, which is an error rather than an empty result"
+        );
+
+        // Encoding nothing is nothing; the operation still succeeded.
         assert!(base64_encode(&[], true).is_empty());
-        assert!(rand(0).is_empty());
-        assert_eq!(rand(16).len(), 16);
+
+        // Zero random bytes is a request that was satisfied, not a failure.
+        assert!(rand(0).expect("zero bytes is a valid request").is_empty());
+        assert_eq!(rand(16).expect("16 bytes can be allocated").len(), 16);
     }
 
     #[test]
@@ -553,11 +663,13 @@ mod tests {
 
         // 1 = PKCS#1 v1.5, 4 = OAEP, the two paddings OpenSSL accepts for encryption.
         for padding in [1, 4] {
-            let encrypted = rsa_encrypt(message, public_pem.as_bytes(), padding);
+            let encrypted =
+                rsa_encrypt(message, public_pem.as_bytes(), padding).expect("padding encrypts");
             assert!(!encrypted.is_empty(), "padding {padding} encrypts");
             assert_ne!(encrypted.as_slice(), message.as_slice());
 
-            let decrypted = rsa_decrypt(&encrypted, private_pem.as_bytes(), padding);
+            let decrypted =
+                rsa_decrypt(&encrypted, private_pem.as_bytes(), padding).expect("padding decrypts");
             assert_eq!(
                 decrypted.as_slice(),
                 message.as_slice(),
@@ -566,14 +678,16 @@ mod tests {
         }
 
         // 2 = SSLv23 (dropped by OpenSSL 3.0), 3 = no padding, 5 = X9.31 and 6 = PSS, which only
-        // sign: DynXX forwards them to OpenSSL, which refuses, so both sides answer with nothing.
+        // sign: DynXX forwards them to OpenSSL, which refuses, so both sides report an error.
         for padding in [2, 3, 5, 6] {
-            assert!(
-                rsa_encrypt(message, public_pem.as_bytes(), padding).is_empty(),
+            assert_eq!(
+                rsa_encrypt(message, public_pem.as_bytes(), padding),
+                Err(CryptoError::InvalidArgument),
                 "padding {padding} cannot encrypt"
             );
-            assert!(
-                rsa_decrypt(&[0x21; 128], private_pem.as_bytes(), padding).is_empty(),
+            assert_eq!(
+                rsa_decrypt(&[0x21; 128], private_pem.as_bytes(), padding),
+                Err(CryptoError::InvalidArgument),
                 "padding {padding} cannot decrypt"
             );
         }
